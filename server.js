@@ -154,13 +154,10 @@ function generateClashYamlServer(data, filterUserId) {
     }
 
     const lines = [];
-    lines.push('port: 7890');
-    lines.push('socks-port: 7891');
-    lines.push('allow-lan: false');
-    lines.push('mode: rule');
-    lines.push('log-level: info');
-    lines.push('external-controller: 127.0.0.1:9090');
-    lines.push('');
+
+    // 注意：订阅 profile 只包含 proxies/proxy-groups/rules，
+    // 不包含 Clash 内核设置（port/socks-port/external-controller 等），
+    // 这些由 Clash Verge 自己管理，包含它们会导致 "the remote profile data is invalid" 错误。
 
     lines.push('proxies:');
     if (proxies.length === 0) {
@@ -295,9 +292,9 @@ function handleAPI(req, res) {
             base64Content = generateSubscriptionBase64(appData, null);
             console.log('[Server] 订阅请求 - 全部节点');
         }
+        // 注意：不要加 Content-Disposition: attachment，否则 Clash Verge 无法正确解析
         res.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': 'attachment; filename=clash-subscription',
             'Subscription-Userinfo': 'upload=0; download=0; total=0'
         });
         res.end(base64Content);
