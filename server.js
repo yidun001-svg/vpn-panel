@@ -83,7 +83,7 @@ function normalizeData(data) {
     };
 }
 
-// ====== UUID 生成（与前端逻辑保持一致） ======
+// ====== UUID 生成 ======
 function generateUUID(seed) {
     const s = seed + Date.now().toString(36);
     let hash = 0;
@@ -92,55 +92,37 @@ function generateUUID(seed) {
     return hex.substr(0, 8) + '-' + hex.substr(0, 4) + '-4' + hex.substr(0, 3) + '-a' + hex.substr(0, 3) + '-' + hex.substr(0, 12);
 }
 
-// ====== Clash YAML 生成（服务端版本） ======
+// ====== Clash YAML 生成 ======
 function generateClashProxyServer(server, user) {
     const password = server.password || ('auto_' + (user.id || '').substring(0, 10));
     const name = (server.name || server.address) + ' [' + (server.protocol || 'Unknown') + ']';
 
     switch (server.protocol) {
         case 'Shadowsocks':
-            return {
-                name, type: 'ss', server: server.address, port: server.port,
-                cipher: 'aes-256-gcm', password
-            };
+            return { name, type: 'ss', server: server.address, port: server.port, cipher: 'aes-256-gcm', password };
         case 'VMess':
-            return {
-                name, type: 'vmess', server: server.address, port: server.port,
-                uuid: generateUUID(user.id), alterId: 0, cipher: 'auto', network: 'tcp'
-            };
+            return { name, type: 'vmess', server: server.address, port: server.port, uuid: generateUUID(user.id), alterId: 0, cipher: 'auto', network: 'tcp' };
         case 'Trojan':
-            return {
-                name, type: 'trojan', server: server.address, port: server.port,
-                password, sni: server.address
-            };
+            return { name, type: 'trojan', server: server.address, port: server.port, password, sni: server.address };
         case 'WireGuard':
         case 'OpenVPN':
             return null;
         default:
-            return {
-                name, type: 'ss', server: server.address, port: server.port,
-                cipher: 'aes-256-gcm', password
-            };
+            return { name, type: 'ss', server: server.address, port: server.port, cipher: 'aes-256-gcm', password };
     }
 }
 
-function generateClashYamlServer(data, filterUserId) {
-    const userMap = {};
+function generateClashYaml(data, filterUserId) {
+    const userMap = {}, serverMap = {};
     data.users.forEach(u => { userMap[u.id] = u; });
-    const serverMap = {};
     data.servers.forEach(s => { serverMap[s.id] = s; });
 
-    const proxies = [];
-    const seenNames = {};
-
+    const proxies = [], seenNames = {};
     data.configs.forEach(c => {
         if (c.disabled) return;
         if (filterUserId && c.userId !== filterUserId) return;
-
-        const server = serverMap[c.serverId];
-        const user = userMap[c.userId];
+        const server = serverMap[c.serverId], user = userMap[c.userId];
         if (!server || !user) return;
-
         const proxy = generateClashProxyServer(server, user);
         if (!proxy || seenNames[proxy.name]) return;
         seenNames[proxy.name] = true;
@@ -148,15 +130,9 @@ function generateClashYamlServer(data, filterUserId) {
     });
 
     const proxyNames = proxies.map(p => p.name);
-    if (proxyNames.length === 0) {
-        proxyNames.push('DIRECT');
-    }
+    if (proxyNames.length === 0) proxyNames.push('DIRECT');
 
     const lines = [];
-
-    // 订阅 profile 只包含 proxies/proxy-groups/rules
-    // Clash 内核设置（port/socks-port/external-controller 等）由 Clash Verge 自己管理
-
     lines.push('proxies:');
     if (proxies.length === 0) {
         lines.push('  # 没有有效的代理节点');
@@ -181,31 +157,21 @@ function generateClashYamlServer(data, filterUserId) {
     lines.push('    type: select');
     lines.push('    proxies:');
     proxyNames.forEach(name => lines.push('      - "' + name + '"'));
-    if (!proxyNames.includes('DIRECT')) {
-        lines.push('      - DIRECT');
-    }
+    if (!proxyNames.includes('DIRECT')) lines.push('      - DIRECT');
 
     if (proxyNames.length > 1 && proxyNames[0] !== 'DIRECT') {
         lines.push('  - name: "Auto"');
         lines.push('    type: url-test');
         lines.push('    proxies:');
-        proxyNames.forEach(name => {
-            if (name !== 'DIRECT') lines.push('      - "' + name + '"');
-        });
+        proxyNames.forEach(name => { if (name !== 'DIRECT') lines.push('      - "' + name + '"'); });
         lines.push('    url: "http://www.gstatic.com/generate_204"');
         lines.push('    interval: 300');
     }
     lines.push('');
-
     lines.push('rules:');
     lines.push('  - MATCH,Proxy');
 
     return lines.join('\n');
-}
-
-function generateSubscriptionBase64(data, filterUserId) {
-    const yaml = generateClashYamlServer(data, filterUserId);
-    return Buffer.from(yaml, 'utf-8').toString('base64');
 }
 
 // ====== 静态文件服务 ======
@@ -214,16 +180,10 @@ function serveStatic(req, res) {
     filePath = filePath.split('?')[0];
     filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
     const fullPath = path.join(__dirname, filePath);
-
     const ext = path.extname(fullPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-
     fs.readFile(fullPath, (err, data) => {
-        if (err) {
-            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-            res.end('404 Not Found');
-            return;
-        }
+        if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('404 Not Found'); return; }
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
     });
@@ -239,11 +199,7 @@ function handleAPI(req, res) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
+    if (method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     if (pathname === '/api/data' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -258,12 +214,9 @@ function handleAPI(req, res) {
             try {
                 const data = JSON.parse(body);
                 appData = normalizeData(data);
-                const saved = saveData(appData);
-                if (saved) {
-                    console.log('[Server] 数据已同步 (users:' + appData.users.length + ' servers:' + appData.servers.length + ' configs:' + appData.configs.length + ')');
-                }
+                saveData(appData);
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: true, saved: saved }));
+                res.end(JSON.stringify({ ok: true }));
             } catch (e) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -272,61 +225,11 @@ function handleAPI(req, res) {
         return;
     }
 
-    // /sub-test: 纯 ASCII 最简配置 (raw YAML, 无中文)
-    if (pathname === '/sub-test' && method === 'GET') {
-        const testYaml = [
-            'proxies:',
-            '  - name: "RackNerd-LA"',
-            '    type: ss',
-            '    server: 204.152.217.105',
-            '    port: 8388',
-            '    cipher: aes-256-gcm',
-            '    password: "Vpn2024!RackNerd"',
-            '',
-            'proxy-groups:',
-            '  - name: "Proxy"',
-            '    type: select',
-            '    proxies:',
-            '      - "RackNerd-LA"',
-            '      - DIRECT',
-            '',
-            'rules:',
-            '  - MATCH,Proxy'
-        ].join('\n');
-
-        res.writeHead(200, {
-            'Content-Type': 'text/plain; charset=utf-8',
-            'Subscription-Userinfo': 'upload=0; download=0; total=0'
-        });
-        console.log('[Server] /sub-test 请求');
-        res.end(testYaml);
-        return;
-    }
-
-    // /sub: 订阅端点 (base64 编码 YAML)
+    // GET /sub - 订阅端点（返回原始 YAML，兼容 Clash Verge v2.x）
     if (pathname === '/sub' && method === 'GET') {
         const token = url.searchParams.get('token');
-        let base64Content;
-        if (token) {
-            base64Content = generateSubscriptionBase64(appData, token);
-            console.log('[Server] 订阅请求 - 用户token: ' + token);
-        } else {
-            base64Content = generateSubscriptionBase64(appData, null);
-            console.log('[Server] 订阅请求 - 全部节点');
-        }
-        res.writeHead(200, {
-            'Content-Type': 'text/plain; charset=utf-8',
-            'Subscription-Userinfo': 'upload=0; download=0; total=0'
-        });
-        res.end(base64Content);
-        return;
-    }
-
-    // /sub-raw: 订阅端点 (raw YAML, 非 base64)
-    if (pathname === '/sub-raw' && method === 'GET') {
-        const token = url.searchParams.get('token');
-        const yaml = generateClashYamlServer(appData, token);
-        console.log('[Server] /sub-raw 请求');
+        const yaml = generateClashYaml(appData, token || null);
+        console.log('[Server] 订阅请求' + (token ? ' - token: ' + token : ' - 全部节点'));
         res.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
             'Subscription-Userinfo': 'upload=0; download=0; total=0'
@@ -338,10 +241,8 @@ function handleAPI(req, res) {
     if (pathname === '/api/status' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
-            status: 'running',
-            port: PORT,
-            users: appData.users.length,
-            servers: appData.servers.length,
+            status: 'running', port: PORT,
+            users: appData.users.length, servers: appData.servers.length,
             configs: appData.configs.length,
             subscriptionUrl: 'http://vpn.xixid.cloud/sub'
         }));
@@ -354,39 +255,14 @@ function handleAPI(req, res) {
 
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
-
-    if (url.startsWith('/api/') || url.startsWith('/sub')) {
-        handleAPI(req, res);
-        return;
-    }
-
+    if (url.startsWith('/api/') || url.startsWith('/sub')) { handleAPI(req, res); return; }
     serveStatic(req, res);
 });
 
 server.listen(PORT, () => {
     console.log('');
-    console.log('  ╔══════════════════════════════════════════╗');
-    console.log('  ║     VPN Manager - 订阅服务器已启动       ║');
-    console.log('  ╠══════════════════════════════════════════╣');
-    console.log('  ║  管理面板: http://localhost:' + PORT + '          ║');
-    console.log('  ║  全部订阅: http://localhost:' + PORT + '/sub       ║');
-    console.log('  ║  原始YAML: http://localhost:' + PORT + '/sub-raw   ║');
-    console.log('  ║  测试端点: http://localhost:' + PORT + '/sub-test  ║');
-    console.log('  ║                                          ║');
-    if (appData.users.length > 0 && appData.configs.length > 0) {
-        console.log('  ║  可用订阅链接:');
-        const userConfigMap = {};
-        appData.configs.forEach(c => {
-            if (!c.disabled) userConfigMap[c.userId] = true;
-        });
-        appData.users.forEach(u => {
-            if (userConfigMap[u.id]) {
-                console.log('  ║    用户 [' + u.name + ']: http://localhost:' + PORT + '/sub?token=' + u.id);
-            }
-        });
-    }
-    console.log('  ║                                          ║');
-    console.log('  ║  按 Ctrl+C 停止服务器                     ║');
-    console.log('  ╚══════════════════════════════════════════╝');
+    console.log('  VPN Manager - 订阅服务器已启动');
+    console.log('  管理面板: http://localhost:' + PORT);
+    console.log('  订阅链接: http://localhost:' + PORT + '/sub');
     console.log('');
 });
