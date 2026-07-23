@@ -1,0 +1,13 @@
+{
+  "users": [],
+  "servers": [],
+  "configs": [],
+  "activities": [],
+  "trafficRecords": [],
+  "settings": {
+    "siteName": "VPN管理面板",
+    "defaultExpireDays": 30,
+    "defaultTrafficLimit": 100,
+    "notifyEmail": ""
+  }
+}
