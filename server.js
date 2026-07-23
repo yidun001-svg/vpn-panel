@@ -44,7 +44,6 @@ function loadData() {
     } catch (e) {
         console.error('[Server] 读取数据文件失败:', e.message);
     }
-    // 返回空数据模板
     return {
         users: [],
         servers: [],
@@ -155,9 +154,8 @@ function generateClashYamlServer(data, filterUserId) {
 
     const lines = [];
 
-    // 注意：订阅 profile 只包含 proxies/proxy-groups/rules，
-    // 不包含 Clash 内核设置（port/socks-port/external-controller 等），
-    // 这些由 Clash Verge 自己管理，包含它们会导致 "the remote profile data is invalid" 错误。
+    // 订阅 profile 只包含 proxies/proxy-groups/rules
+    // Clash 内核设置（port/socks-port/external-controller 等）由 Clash Verge 自己管理
 
     lines.push('proxies:');
     if (proxies.length === 0) {
@@ -179,7 +177,7 @@ function generateClashYamlServer(data, filterUserId) {
     lines.push('');
 
     lines.push('proxy-groups:');
-    lines.push('  - name: "节点选择"');
+    lines.push('  - name: "Proxy"');
     lines.push('    type: select');
     lines.push('    proxies:');
     proxyNames.forEach(name => lines.push('      - "' + name + '"'));
@@ -188,7 +186,7 @@ function generateClashYamlServer(data, filterUserId) {
     }
 
     if (proxyNames.length > 1 && proxyNames[0] !== 'DIRECT') {
-        lines.push('  - name: "自动选择"');
+        lines.push('  - name: "Auto"');
         lines.push('    type: url-test');
         lines.push('    proxies:');
         proxyNames.forEach(name => {
@@ -200,7 +198,7 @@ function generateClashYamlServer(data, filterUserId) {
     lines.push('');
 
     lines.push('rules:');
-    lines.push('  - MATCH,节点选择');
+    lines.push('  - MATCH,Proxy');
 
     return lines.join('\n');
 }
@@ -213,9 +211,7 @@ function generateSubscriptionBase64(data, filterUserId) {
 // ====== 静态文件服务 ======
 function serveStatic(req, res) {
     let filePath = req.url === '/' ? '/index.html' : req.url;
-    // 去除 query string
     filePath = filePath.split('?')[0];
-    // 安全：防止目录穿越
     filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
     const fullPath = path.join(__dirname, filePath);
 
@@ -239,7 +235,6 @@ function handleAPI(req, res) {
     const pathname = url.pathname;
     const method = req.method.toUpperCase();
 
-    // CORS 头
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -250,14 +245,12 @@ function handleAPI(req, res) {
         return;
     }
 
-    // GET /api/data - 获取完整数据
     if (pathname === '/api/data' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(appData));
         return;
     }
 
-    // POST /api/sync - 前端同步数据到服务器
     if (pathname === '/api/sync' && method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk; });
@@ -279,20 +272,48 @@ function handleAPI(req, res) {
         return;
     }
 
-    // GET /sub - 订阅端点
+    // /sub-test: 纯 ASCII 最简配置 (raw YAML, 无中文)
+    if (pathname === '/sub-test' && method === 'GET') {
+        const testYaml = [
+            'proxies:',
+            '  - name: "RackNerd-LA"',
+            '    type: ss',
+            '    server: 204.152.217.105',
+            '    port: 8388',
+            '    cipher: aes-256-gcm',
+            '    password: "Vpn2024!RackNerd"',
+            '',
+            'proxy-groups:',
+            '  - name: "Proxy"',
+            '    type: select',
+            '    proxies:',
+            '      - "RackNerd-LA"',
+            '      - DIRECT',
+            '',
+            'rules:',
+            '  - MATCH,Proxy'
+        ].join('\n');
+
+        res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Subscription-Userinfo': 'upload=0; download=0; total=0'
+        });
+        console.log('[Server] /sub-test 请求');
+        res.end(testYaml);
+        return;
+    }
+
+    // /sub: 订阅端点 (base64 编码 YAML)
     if (pathname === '/sub' && method === 'GET') {
         const token = url.searchParams.get('token');
         let base64Content;
         if (token) {
-            // 按用户过滤
             base64Content = generateSubscriptionBase64(appData, token);
-            console.log('[Server] 订阅请求 - 用户token: ' + token + ' (proxies in data)');
+            console.log('[Server] 订阅请求 - 用户token: ' + token);
         } else {
-            // 返回所有配置
             base64Content = generateSubscriptionBase64(appData, null);
             console.log('[Server] 订阅请求 - 全部节点');
         }
-        // 注意：不要加 Content-Disposition: attachment，否则 Clash Verge 无法正确解析
         res.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
             'Subscription-Userinfo': 'upload=0; download=0; total=0'
@@ -301,7 +322,19 @@ function handleAPI(req, res) {
         return;
     }
 
-    // GET /api/status - 服务器状态
+    // /sub-raw: 订阅端点 (raw YAML, 非 base64)
+    if (pathname === '/sub-raw' && method === 'GET') {
+        const token = url.searchParams.get('token');
+        const yaml = generateClashYamlServer(appData, token);
+        console.log('[Server] /sub-raw 请求');
+        res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Subscription-Userinfo': 'upload=0; download=0; total=0'
+        });
+        res.end(yaml);
+        return;
+    }
+
     if (pathname === '/api/status' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
@@ -310,27 +343,23 @@ function handleAPI(req, res) {
             users: appData.users.length,
             servers: appData.servers.length,
             configs: appData.configs.length,
-            subscriptionUrl: 'http://localhost:' + PORT + '/sub'
+            subscriptionUrl: 'http://vpn.xixid.cloud/sub'
         }));
         return;
     }
 
-    // 未匹配的 API 路由
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'API not found' }));
 }
 
-// ====== 启动服务器 ======
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
 
-    // API 路由
     if (url.startsWith('/api/') || url.startsWith('/sub')) {
         handleAPI(req, res);
         return;
     }
 
-    // 静态文件服务
     serveStatic(req, res);
 });
 
@@ -341,9 +370,9 @@ server.listen(PORT, () => {
     console.log('  ╠══════════════════════════════════════════╣');
     console.log('  ║  管理面板: http://localhost:' + PORT + '          ║');
     console.log('  ║  全部订阅: http://localhost:' + PORT + '/sub       ║');
-    console.log('  ║  用户订阅: http://localhost:' + PORT + '/sub?token=USER_ID');
+    console.log('  ║  原始YAML: http://localhost:' + PORT + '/sub-raw   ║');
+    console.log('  ║  测试端点: http://localhost:' + PORT + '/sub-test  ║');
     console.log('  ║                                          ║');
-    // 列出有配置的用户及其订阅URL
     if (appData.users.length > 0 && appData.configs.length > 0) {
         console.log('  ║  可用订阅链接:');
         const userConfigMap = {};
