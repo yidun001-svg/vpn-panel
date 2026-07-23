@@ -1,0 +1,302 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN管理面板</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="js/clash-generator.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="logo">
+                <i class="fas fa-shield-halved"></i>
+                <span>VPN管理</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="#dashboard" class="nav-item active" data-page="dashboard">
+                    <i class="fas fa-chart-simple"></i>
+                    <span>控制台</span>
+                </a>
+                <a href="#users" class="nav-item" data-page="users">
+                    <i class="fas fa-users"></i>
+                    <span>用户管理</span>
+                </a>
+                <a href="#servers" class="nav-item" data-page="servers">
+                    <i class="fas fa-server"></i>
+                    <span>服务器管理</span>
+                </a>
+                <a href="#configs" class="nav-item" data-page="configs">
+                    <i class="fas fa-key"></i>
+                    <span>配置管理</span>
+                </a>
+                <a href="#subscription" class="nav-item" data-page="subscription">
+                    <i class="fas fa-link"></i>
+                    <span>订阅管理</span>
+                </a>
+                <a href="#traffic" class="nav-item" data-page="traffic">
+                    <i class="fas fa-chart-line"></i>
+                    <span>流量统计</span>
+                </a>
+                <a href="#settings" class="nav-item" data-page="settings">
+                    <i class="fas fa-gear"></i>
+                    <span>系统设置</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-dot offline"></span>
+                    <span>本地模式</span>
+                </div>
+            </div>
+        </aside>
+        <main class="main-content">
+            <header class="top-bar">
+                <button class="menu-toggle" id="menuToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h2 id="pageTitle">控制台</h2>
+                <div class="top-bar-actions">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索..." id="globalSearch">
+                    </div>
+                    <div class="notification-bell">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge" id="notifBadge">0</span>
+                    </div>
+                </div>
+            </header>
+            <div class="page-content">
+                <section id="page-dashboard" class="page active">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon blue"><i class="fas fa-user"></i></div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="statUsers">0</span>
+                                <span class="stat-label">总用户数</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon green"><i class="fas fa-server"></i></div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="statServers">0</span>
+                                <span class="stat-label">服务器数</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon orange"><i class="fas fa-wifi"></i></div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="statActive">0</span>
+                                <span class="stat-label">活跃连接</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon purple"><i class="fas fa-chart-simple"></i></div>
+                            <div class="stat-info">
+                                <span class="stat-value" id="statTodayTraffic">0 GB</span>
+                                <span class="stat-label">今日流量</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chart-grid">
+                        <div class="card chart-card">
+                            <h3><i class="fas fa-chart-area"></i> 流量趋势（7天）</h3>
+                            <canvas id="trafficChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3><i class="fas fa-chart-pie"></i> 服务器负载分布</h3>
+                            <canvas id="serverChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-clock-rotate-left"></i> 最近活动</h3>
+                        <table class="data-table">
+                            <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>状态</th></tr></thead>
+                            <tbody id="activityBody"><tr><td colspan="4" class="text-center">暂无活动记录</td></tr></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section id="page-users" class="page">
+                    <div class="section-toolbar">
+                        <button class="btn btn-primary" onclick="showAddUserModal()"><i class="fas fa-plus"></i> 添加用户</button>
+                        <div class="filter-group">
+                            <select id="userStatusFilter" onchange="renderUsers()">
+                                <option value="all">全部状态</option>
+                                <option value="active">活跃</option>
+                                <option value="expired">已过期</option>
+                                <option value="disabled">已禁用</option>
+                            </select>
+                            <input type="text" placeholder="搜索用户..." id="userSearch" oninput="renderUsers()">
+                        </div>
+                    </div>
+                    <div class="card">
+                        <table class="data-table">
+                            <thead><tr><th>用户名</th><th>邮箱</th><th>套餐</th><th>流量用量</th><th>到期时间</th><th>状态</th><th>操作</th></tr></thead>
+                            <tbody id="usersBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section id="page-servers" class="page">
+                    <div class="section-toolbar">
+                        <button class="btn btn-primary" onclick="showAddServerModal()"><i class="fas fa-plus"></i> 添加服务器</button>
+                    </div>
+                    <div class="card">
+                        <table class="data-table">
+                            <thead><tr><th>名称</th><th>地址</th><th>端口</th><th>协议</th><th>负载</th><th>状态</th><th>操作</th></tr></thead>
+                            <tbody id="serversBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section id="page-configs" class="page">
+                    <div class="section-toolbar">
+                        <button class="btn btn-primary" onclick="showAddConfigModal()"><i class="fas fa-plus"></i> 生成配置</button>
+                        <button class="btn btn-secondary" onclick="exportAllConfigs()"><i class="fas fa-download"></i> 批量导出</button>
+                    </div>
+                    <div class="card">
+                        <table class="data-table">
+                            <thead><tr><th>配置名称</th><th>用户</th><th>服务器</th><th>协议</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead>
+                            <tbody id="configsBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section id="page-subscription" class="page">
+                    <div class="section-toolbar">
+                        <button class="btn btn-primary" onclick="exportClashYamlAll()"><i class="fas fa-file-code"></i> 导出Clash YAML</button>
+                        <button class="btn btn-secondary" id="btnSyncServer" onclick="syncDataToServer()"><i class="fas fa-cloud-upload-alt"></i> 同步数据到服务器</button>
+                        <span id="serverStatus" style="margin-left:12px;font-size:13px;display:flex;align-items:center;gap:6px">
+                            <span class="status-dot offline"></span> 服务器未连接
+                        </span>
+                    </div>
+                    <div class="card" style="margin-bottom:16px">
+                        <h3><i class="fas fa-server"></i> 订阅服务器</h3>
+                        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+                            <div class="form-group" style="margin:0">
+                                <label style="font-size:12px;color:var(--text-secondary)">服务器地址</label>
+                                <div style="display:flex;align-items:center;gap:8px">
+                                    <input type="text" id="serverBaseUrl" value="http://localhost:3456" style="width:220px;font-family:monospace;font-size:13px">
+                                    <button class="btn btn-secondary btn-sm" onclick="checkServerStatus()"><i class="fas fa-rotate"></i> 检测</button>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin:0">
+                                <label style="font-size:12px;color:var(--text-secondary)">启动命令</label>
+                                <code style="background:var(--bg);padding:6px 10px;border-radius:4px;font-size:13px;display:block">node server.js</code>
+                            </div>
+                        </div>
+                        <p style="margin-top:12px;font-size:12px;color:var(--text-muted)">
+                            <i class="fas fa-info-circle"></i> 在项目目录中运行 <code>npm start</code> 或 <code>node server.js</code> 启动订阅服务器。
+                            启动后点击"检测"确认连接，然后点击"同步数据到服务器"。
+                        </p>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-list-ul"></i> 用户订阅链接</h3>
+                        <div id="subscriptionUserList">
+                            <p style="font-size:13px;color:var(--text-muted);padding:20px;text-align:center">
+                                暂无用户数据。请先在"用户管理"中添加用户并生成配置。
+                            </p>
+                        </div>
+                    </div>
+                </section>
+                <section id="page-traffic" class="page">
+                    <div class="section-toolbar">
+                        <div class="filter-group">
+                            <select id="trafficPeriod" onchange="renderTraffic()">
+                                <option value="24h">最近24小时</option>
+                                <option value="7d">最近7天</option>
+                                <option value="30d">最近30天</option>
+                            </select>
+                            <select id="trafficUser" onchange="renderTraffic()">
+                                <option value="all">全部用户</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card"><canvas id="trafficDetailChart"></canvas></div>
+                    <div class="card" style="margin-top:20px">
+                        <h3><i class="fas fa-ranking-star"></i> 流量排行</h3>
+                        <table class="data-table">
+                            <thead><tr><th>排名</th><th>用户</th><th>上传</th><th>下载</th><th>总计</th></tr></thead>
+                            <tbody id="trafficRankBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section id="page-settings" class="page">
+                    <div class="card">
+                        <h3><i class="fas fa-sliders"></i> 通用设置</h3>
+                        <div class="settings-form">
+                            <div class="form-group"><label>站点名称</label><input type="text" id="siteName" value="VPN管理面板"></div>
+                            <div class="form-group"><label>默认到期天数</label><input type="number" id="defaultExpireDays" value="30" min="1"></div>
+                            <div class="form-group"><label>默认流量限额 (GB)</label><input type="number" id="defaultTrafficLimit" value="100" min="1"></div>
+                            <div class="form-group"><label>通知邮箱</label><input type="email" id="notifyEmail" placeholder="admin@example.com"></div>
+                            <button class="btn btn-primary" onclick="saveSettings()"><i class="fas fa-floppy-disk"></i> 保存设置</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-database"></i> 数据管理</h3>
+                        <div class="settings-form">
+                            <button class="btn btn-secondary" onclick="exportData()"><i class="fas fa-file-export"></i> 导出数据</button>
+                            <button class="btn btn-secondary" onclick="document.getElementById('importFileInput').click()"><i class="fas fa-file-import"></i> 导入数据</button>
+                            <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importData(event)">
+                            <button class="btn btn-danger" onclick="resetAllData()"><i class="fas fa-trash-can"></i> 重置所有数据</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-shield"></i> 防火墙与安全</h3>
+                        <div class="settings-form">
+                            <div style="display:flex;flex-direction:column;gap:12px">
+                                <div style="display:flex;align-items:center;justify-content:space-between">
+                                    <label style="font-size:13px">启用防火墙保护</label>
+                                    <label class="switch"><input type="checkbox" id="firewallEnabled"><span class="slider"></span></label>
+                                </div>
+                                <div style="display:flex;align-items:center;justify-content:space-between">
+                                    <label style="font-size:13px">拦截未知IP访问</label>
+                                    <label class="switch"><input type="checkbox" id="firewallBlockUnknown"><span class="slider"></span></label>
+                                </div>
+                                <div style="display:flex;align-items:center;justify-content:space-between">
+                                    <label style="font-size:13px">记录攻击尝试</label>
+                                    <label class="switch"><input type="checkbox" id="firewallLogAttacks"><span class="slider"></span></label>
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size:13px">最大登录尝试次数</label>
+                                    <input type="number" id="firewallMaxAttempts" min="1" max="20">
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" onclick="applyFirewallSettings()" style="margin-top:8px"><i class="fas fa-check"></i> 应用防火墙规则</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-list"></i> IP白名单管理</h3>
+                        <div class="settings-form">
+                            <div style="display:flex;gap:8px">
+                                <input type="text" id="newAllowedIP" placeholder="输入IP地址，如: 192.168.1.1" style="flex:1">
+                                <button class="btn btn-primary btn-sm" onclick="addAllowedIP()"><i class="fas fa-plus"></i> 添加</button>
+                            </div>
+                            <div id="allowedIPsList" style="margin-top:8px"></div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-clipboard-list"></i> 安全审计日志</h3>
+                        <div class="settings-form">
+                            <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">记录所有关键操作，包括用户管理、配置生成、系统设置变更等。</p>
+                            <button class="btn btn-secondary" onclick="showAuditLogs()"><i class="fas fa-eye"></i> 查看审计日志</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="modalTitle">标题</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+    <script src="js/app.js"></script>
+</body>
+</html>
+
