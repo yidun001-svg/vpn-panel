@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# 运行时数据（包含用户信息、服务器配置等敏感数据）
+data/vpn-data.json
+
+# 环境变量
+.env
+.env.local
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志
+*.log
+npm-debug.log*
