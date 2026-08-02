@@ -44,6 +44,7 @@ function loadData() {
     } catch (e) {
         console.error('[Server] 读取数据文件失败:', e.message);
     }
+    // 返回空数据模板
     return {
         users: [],
         servers: [],
@@ -83,7 +84,7 @@ function normalizeData(data) {
     };
 }
 
-// ====== UUID 生成 ======
+// ====== UUID 生成（与前端逻辑保持一致） ======
 function generateUUID(seed) {
     const s = seed + Date.now().toString(36);
     let hash = 0;
@@ -92,37 +93,55 @@ function generateUUID(seed) {
     return hex.substr(0, 8) + '-' + hex.substr(0, 4) + '-4' + hex.substr(0, 3) + '-a' + hex.substr(0, 3) + '-' + hex.substr(0, 12);
 }
 
-// ====== Clash YAML 生成 ======
+// ====== Clash YAML 生成（服务端版本） ======
 function generateClashProxyServer(server, user) {
     const password = server.password || ('auto_' + (user.id || '').substring(0, 10));
     const name = (server.name || server.address) + ' [' + (server.protocol || 'Unknown') + ']';
 
     switch (server.protocol) {
         case 'Shadowsocks':
-            return { name, type: 'ss', server: server.address, port: server.port, cipher: 'aes-256-gcm', password };
+            return {
+                name, type: 'ss', server: server.address, port: server.port,
+                cipher: 'aes-256-gcm', password
+            };
         case 'VMess':
-            return { name, type: 'vmess', server: server.address, port: server.port, uuid: generateUUID(user.id), alterId: 0, cipher: 'auto', network: 'tcp' };
+            return {
+                name, type: 'vmess', server: server.address, port: server.port,
+                uuid: generateUUID(user.id), alterId: 0, cipher: 'auto', network: 'tcp'
+            };
         case 'Trojan':
-            return { name, type: 'trojan', server: server.address, port: server.port, password, sni: server.address };
+            return {
+                name, type: 'trojan', server: server.address, port: server.port,
+                password, sni: server.address
+            };
         case 'WireGuard':
         case 'OpenVPN':
             return null;
         default:
-            return { name, type: 'ss', server: server.address, port: server.port, cipher: 'aes-256-gcm', password };
+            return {
+                name, type: 'ss', server: server.address, port: server.port,
+                cipher: 'aes-256-gcm', password
+            };
     }
 }
 
-function generateClashYaml(data, filterUserId) {
-    const userMap = {}, serverMap = {};
+function generateClashYamlServer(data, filterUserId) {
+    const userMap = {};
     data.users.forEach(u => { userMap[u.id] = u; });
+    const serverMap = {};
     data.servers.forEach(s => { serverMap[s.id] = s; });
 
-    const proxies = [], seenNames = {};
+    const proxies = [];
+    const seenNames = {};
+
     data.configs.forEach(c => {
         if (c.disabled) return;
         if (filterUserId && c.userId !== filterUserId) return;
-        const server = serverMap[c.serverId], user = userMap[c.userId];
+
+        const server = serverMap[c.serverId];
+        const user = userMap[c.userId];
         if (!server || !user) return;
+
         const proxy = generateClashProxyServer(server, user);
         if (!proxy || seenNames[proxy.name]) return;
         seenNames[proxy.name] = true;
@@ -130,9 +149,19 @@ function generateClashYaml(data, filterUserId) {
     });
 
     const proxyNames = proxies.map(p => p.name);
-    if (proxyNames.length === 0) proxyNames.push('DIRECT');
+    if (proxyNames.length === 0) {
+        proxyNames.push('DIRECT');
+    }
 
     const lines = [];
+    lines.push('port: 7890');
+    lines.push('socks-port: 7891');
+    lines.push('allow-lan: false');
+    lines.push('mode: rule');
+    lines.push('log-level: info');
+    lines.push('external-controller: 127.0.0.1:9090');
+    lines.push('');
+
     lines.push('proxies:');
     if (proxies.length === 0) {
         lines.push('  # 没有有效的代理节点');
@@ -153,37 +182,55 @@ function generateClashYaml(data, filterUserId) {
     lines.push('');
 
     lines.push('proxy-groups:');
-    lines.push('  - name: "Proxy"');
+    lines.push('  - name: "节点选择"');
     lines.push('    type: select');
     lines.push('    proxies:');
     proxyNames.forEach(name => lines.push('      - "' + name + '"'));
-    if (!proxyNames.includes('DIRECT')) lines.push('      - DIRECT');
+    if (!proxyNames.includes('DIRECT')) {
+        lines.push('      - DIRECT');
+    }
 
     if (proxyNames.length > 1 && proxyNames[0] !== 'DIRECT') {
-        lines.push('  - name: "Auto"');
+        lines.push('  - name: "自动选择"');
         lines.push('    type: url-test');
         lines.push('    proxies:');
-        proxyNames.forEach(name => { if (name !== 'DIRECT') lines.push('      - "' + name + '"'); });
+        proxyNames.forEach(name => {
+            if (name !== 'DIRECT') lines.push('      - "' + name + '"');
+        });
         lines.push('    url: "http://www.gstatic.com/generate_204"');
         lines.push('    interval: 300');
     }
     lines.push('');
+
     lines.push('rules:');
-    lines.push('  - MATCH,Proxy');
+    lines.push('  - MATCH,节点选择');
 
     return lines.join('\n');
+}
+
+function generateSubscriptionBase64(data, filterUserId) {
+    const yaml = generateClashYamlServer(data, filterUserId);
+    return Buffer.from(yaml, 'utf-8').toString('base64');
 }
 
 // ====== 静态文件服务 ======
 function serveStatic(req, res) {
     let filePath = req.url === '/' ? '/index.html' : req.url;
+    // 去除 query string
     filePath = filePath.split('?')[0];
+    // 安全：防止目录穿越
     filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
     const fullPath = path.join(__dirname, filePath);
+
     const ext = path.extname(fullPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
     fs.readFile(fullPath, (err, data) => {
-        if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('404 Not Found'); return; }
+        if (err) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('404 Not Found');
+            return;
+        }
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
     });
@@ -195,18 +242,25 @@ function handleAPI(req, res) {
     const pathname = url.pathname;
     const method = req.method.toUpperCase();
 
+    // CORS 头
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
 
+    // GET /api/data - 获取完整数据
     if (pathname === '/api/data' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(appData));
         return;
     }
 
+    // POST /api/sync - 前端同步数据到服务器
     if (pathname === '/api/sync' && method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk; });
@@ -214,9 +268,12 @@ function handleAPI(req, res) {
             try {
                 const data = JSON.parse(body);
                 appData = normalizeData(data);
-                saveData(appData);
+                const saved = saveData(appData);
+                if (saved) {
+                    console.log('[Server] 数据已同步 (users:' + appData.users.length + ' servers:' + appData.servers.length + ' configs:' + appData.configs.length + ')');
+                }
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-                res.end(JSON.stringify({ ok: true }));
+                res.end(JSON.stringify({ ok: true, saved: saved }));
             } catch (e) {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -225,44 +282,85 @@ function handleAPI(req, res) {
         return;
     }
 
-    // GET /sub - 订阅端点（返回原始 YAML，兼容 Clash Verge v2.x）
+    // GET /sub - 订阅端点
     if (pathname === '/sub' && method === 'GET') {
         const token = url.searchParams.get('token');
-        const yaml = generateClashYaml(appData, token || null);
-        console.log('[Server] 订阅请求' + (token ? ' - token: ' + token : ' - 全部节点'));
+        let base64Content;
+        if (token) {
+            // 按用户过滤
+            base64Content = generateSubscriptionBase64(appData, token);
+            console.log('[Server] 订阅请求 - 用户token: ' + token + ' (proxies in data)');
+        } else {
+            // 返回所有配置
+            base64Content = generateSubscriptionBase64(appData, null);
+            console.log('[Server] 订阅请求 - 全部节点');
+        }
         res.writeHead(200, {
             'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': 'attachment; filename=clash-subscription',
             'Subscription-Userinfo': 'upload=0; download=0; total=0'
         });
-        res.end(yaml);
+        res.end(base64Content);
         return;
     }
 
+    // GET /api/status - 服务器状态
     if (pathname === '/api/status' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
-            status: 'running', port: PORT,
-            users: appData.users.length, servers: appData.servers.length,
+            status: 'running',
+            port: PORT,
+            users: appData.users.length,
+            servers: appData.servers.length,
             configs: appData.configs.length,
-            subscriptionUrl: 'http://vpn.xixid.cloud/sub'
+            subscriptionUrl: 'http://localhost:' + PORT + '/sub'
         }));
         return;
     }
 
+    // 未匹配的 API 路由
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'API not found' }));
 }
 
+// ====== 启动服务器 ======
 const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0];
-    if (url.startsWith('/api/') || url.startsWith('/sub')) { handleAPI(req, res); return; }
+
+    // API 路由
+    if (url.startsWith('/api/') || url.startsWith('/sub')) {
+        handleAPI(req, res);
+        return;
+    }
+
+    // 静态文件服务
     serveStatic(req, res);
 });
 
 server.listen(PORT, () => {
     console.log('');
-    console.log('  VPN Manager - 订阅服务器已启动');
-    console.log('  管理面板: http://localhost:' + PORT);
-    console.log('  订阅链接: http://localhost:' + PORT + '/sub');
+    console.log('  ╔══════════════════════════════════════════╗');
+    console.log('  ║     VPN Manager - 订阅服务器已启动       ║');
+    console.log('  ╠══════════════════════════════════════════╣');
+    console.log('  ║  管理面板: http://localhost:' + PORT + '          ║');
+    console.log('  ║  全部订阅: http://localhost:' + PORT + '/sub       ║');
+    console.log('  ║  用户订阅: http://localhost:' + PORT + '/sub?token=USER_ID');
+    console.log('  ║                                          ║');
+    // 列出有配置的用户及其订阅URL
+    if (appData.users.length > 0 && appData.configs.length > 0) {
+        console.log('  ║  可用订阅链接:');
+        const userConfigMap = {};
+        appData.configs.forEach(c => {
+            if (!c.disabled) userConfigMap[c.userId] = true;
+        });
+        appData.users.forEach(u => {
+            if (userConfigMap[u.id]) {
+                console.log('  ║    用户 [' + u.name + ']: http://localhost:' + PORT + '/sub?token=' + u.id);
+            }
+        });
+    }
+    console.log('  ║                                          ║');
+    console.log('  ║  按 Ctrl+C 停止服务器                     ║');
+    console.log('  ╚══════════════════════════════════════════╝');
     console.log('');
 });
