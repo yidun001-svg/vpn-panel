@@ -168,6 +168,7 @@ function switchPage(pageId) {
     const titles = { dashboard: '控制台', users: '用户管理', servers: '服务器管理', configs: '配置管理', subscription: '订阅管理', traffic: '流量统计', deploy: 'VPN 部署', settings: '系统设置' };
     document.getElementById('pageTitle').textContent = titles[pageId] || 'VPN管理';
     document.title = titles[pageId] + ' - VPN管理面板';
+    // 如果切换到设置页，渲染防火墙
     if (pageId === 'settings') {
         loadSettings();
         renderFirewallSettings();
@@ -228,13 +229,16 @@ function saveData() {
         const encrypted = encryptData(appData);
         localStorage.setItem(DB_KEY, encrypted);
         updateBadge();
+        // 如果通过 HTTP 访问，自动同步到服务器
         autoSyncToServer();
     } catch (e) { console.error('Save error:', e); }
 }
 
 var _autoSyncTimer = null;
 function autoSyncToServer() {
+    // 只在 HTTP/HTTPS 协议下同步（file:// 跳过）
     if (!window.location.protocol.startsWith('http')) return;
+    // 防抖：500ms 内只同步一次
     if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
     _autoSyncTimer = setTimeout(function() {
         var baseUrl = window.location.protocol + '//' + window.location.host;
@@ -242,7 +246,7 @@ function autoSyncToServer() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(appData)
-        }).catch(function() {});
+        }).catch(function() {}); // 静默失败
     }, 500);
 }
 
@@ -340,3 +344,957 @@ function initCharts() {
         }
     });
 }
+
+// ====== 用户管理 ======
+function renderUsers() {
+    const filter = document.getElementById('userStatusFilter').value;
+    const search = document.getElementById('userSearch').value.toLowerCase();
+    let users = appData.users;
+    if (filter !== 'all') users = users.filter(u => getUserStatus(u) === filter);
+    if (search) users = users.filter(u => u.name.toLowerCase().includes(search) || (u.email || '').toLowerCase().includes(search));
+
+    const tbody = document.getElementById('usersBody');
+    if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">暂无用户</td></tr>';
+        return;
+    }
+    tbody.innerHTML = users.map(u => {
+        const status = getUserStatus(u);
+        const statusMap = { active: '活跃', expired: '已过期', disabled: '已禁用' };
+        const percent = getTrafficPercent(u);
+        const pClass = percent > 80 ? 'high' : percent > 50 ? 'medium' : 'low';
+        return '<tr>' +
+            '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
+            '<td>' + escapeHtml(u.email || '-') + '</td>' +
+            '<td>' + escapeHtml(u.plan || '标准') + '</td>' +
+            '<td><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;min-width:50px">' + getTrafficUsedGB(u) + ' / ' + u.trafficLimit + ' GB</span><div class="progress-bar"><div class="progress-fill ' + pClass + '" style="width:' + percent + '%"></div></div></div></td>' +
+            '<td>' + formatDate(u.expireDate) + '</td>' +
+            '<td><span class="badge ' + status + '">' + statusMap[status] + '</span></td>' +
+            '<td>' +
+                '<button class="btn-icon edit" onclick="editUser(\'' + u.id + '\')" title="编辑"><i class="fas fa-pen"></i></button>' +
+                '<button class="btn-icon copy" onclick="getConfigForUser(\'' + u.id + '\')" title="获取配置"><i class="fas fa-key"></i></button>' +
+                '<button class="btn-icon copy" onclick="showSubscriptionUrl(\'' + u.id + '\')" title="订阅链接"><i class="fas fa-link"></i></button>' +
+                '<button class="btn-icon delete" onclick="deleteUser(\'' + u.id + '\')" title="删除"><i class="fas fa-trash"></i></button>' +
+            '</td></tr>';
+    }).join('');
+}
+
+function showAddUserModal() {
+    const html = '<div class="form-group"><label>用户名 *</label><input type="text" id="editName" placeholder="输入用户名"></div>' +
+        '<div class="form-group"><label>邮箱</label><input type="email" id="editEmail" placeholder="email@example.com"></div>' +
+        '<div class="form-group"><label>套餐</label><select id="editPlan"><option value="标准">标准</option><option value="高级">高级</option><option value="专业">专业</option><option value="无限">无限</option></select></div>' +
+        '<div class="form-group"><label>流量限额 (GB)</label><input type="number" id="editTrafficLimit" value="' + appData.settings.defaultTrafficLimit + '" min="1"></div>' +
+        '<div class="form-group"><label>到期天数</label><input type="number" id="editExpireDays" value="' + appData.settings.defaultExpireDays + '" min="1"></div>' +
+        '<div class="form-group"><label>密码</label><div class="input-group" style="display:flex;gap:8px"><input type="text" id="editPassword" value="' + generateStrongPassword(12) + '" style="flex:1"><button class="btn btn-secondary btn-sm" onclick="document.getElementById(\'editPassword\').value=generateStrongPassword(12)">生成</button></div></div>' +
+        '<button class="btn btn-primary" onclick="addUser()"><i class="fas fa-check"></i> 确认添加</button>';
+    openModal('添加用户', html);
+}
+
+function addUser() {
+    const name = document.getElementById('editName').value.trim();
+    if (!name) { showToast('请输入用户名', 'error'); return; }
+    const expireDate = new Date();
+    expireDate.setDate(expireDate.getDate() + parseInt(document.getElementById('editExpireDays').value));
+    const user = {
+        id: generateId(),
+        name: name,
+        email: document.getElementById('editEmail').value.trim(),
+        plan: document.getElementById('editPlan').value,
+        trafficLimit: parseInt(document.getElementById('editTrafficLimit').value) || 100,
+        trafficUsed: 0,
+        expireDate: expireDate.toISOString(),
+        disabled: false,
+        password: document.getElementById('editPassword').value,
+        createdAt: new Date().toISOString()
+    };
+    appData.users.push(user);
+    saveData();
+    addActivity(name, '创建用户账号', 'success');
+    closeModal();
+    renderUsers();
+    renderDashboard();
+    showToast('用户 ' + name + ' 添加成功', 'success');
+}
+
+function editUser(id) {
+    const user = appData.users.find(u => u.id === id);
+    if (!user) return;
+    const html = '<div class="form-group"><label>用户名 *</label><input type="text" id="editName" value="' + escapeHtml(user.name) + '"></div>' +
+        '<div class="form-group"><label>邮箱</label><input type="email" id="editEmail" value="' + escapeHtml(user.email || '') + '"></div>' +
+        '<div class="form-group"><label>套餐</label><select id="editPlan">' + ['标准','高级','专业','无限'].map(p => '<option value="' + p + '"' + (user.plan === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+        '<div class="form-group"><label>流量限额 (GB)</label><input type="number" id="editTrafficLimit" value="' + user.trafficLimit + '" min="1"></div>' +
+        '<div class="form-group"><label>新密码（留空不修改）</label><div class="input-group" style="display:flex;gap:8px"><input type="text" id="editPassword" style="flex:1"><button class="btn btn-secondary btn-sm" onclick="document.getElementById(\'editPassword\').value=generateStrongPassword(12)">生成</button></div></div>' +
+        '<div class="form-group"><label><input type="checkbox" id="editDisabled"' + (user.disabled ? ' checked' : '') + '> 禁用账号</label></div>' +
+        '<button class="btn btn-primary" onclick="saveUser(\'' + id + '\')"><i class="fas fa-check"></i> 保存</button>';
+    openModal('编辑用户 - ' + escapeHtml(user.name), html);
+}
+
+function saveUser(id) {
+    const user = appData.users.find(u => u.id === id);
+    if (!user) return;
+    const name = document.getElementById('editName').value.trim();
+    if (!name) { showToast('请输入用户名', 'error'); return; }
+    user.name = name;
+    user.email = document.getElementById('editEmail').value.trim();
+    user.plan = document.getElementById('editPlan').value;
+    user.trafficLimit = parseInt(document.getElementById('editTrafficLimit').value) || 100;
+    user.disabled = document.getElementById('editDisabled').checked;
+    const newPwd = document.getElementById('editPassword').value.trim();
+    if (newPwd) user.password = newPwd;
+    saveData();
+    addActivity(name, '修改用户信息', 'success');
+    closeModal();
+    renderUsers();
+    renderDashboard();
+    showToast('用户信息已更新', 'success');
+}
+
+function deleteUser(id) {
+    const user = appData.users.find(u => u.id === id);
+    if (!user) return;
+    if (!confirm('确定要删除用户 "' + user.name + '" 吗？此操作不可撤销！')) return;
+    appData.users = appData.users.filter(u => u.id !== id);
+    appData.configs = appData.configs.filter(c => c.userId !== id);
+    saveData();
+    addActivity(user.name, '删除用户账号', 'success');
+    renderUsers();
+    renderDashboard();
+    showToast('用户已删除', 'info');
+}
+
+
+// ====== 服务器管理 ======
+function renderServers() {
+    const tbody = document.getElementById('serversBody');
+    if (appData.servers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">暂无服务器，点击上方添加</td></tr>';
+        return;
+    }
+    tbody.innerHTML = appData.servers.map(s => {
+        const status = s.online !== false ? 'online' : 'offline';
+        const statusMap = { online: '在线', offline: '离线' };
+        const load = s.load || 0;
+        const loadClass = load > 80 ? 'high' : load > 50 ? 'medium' : 'low';
+        return '<tr><td><strong>' + escapeHtml(s.name) + '</strong></td><td>' + escapeHtml(s.address) + '</td><td>' + s.port + '</td><td>' + escapeHtml(s.protocol) + '</td><td><div class="progress-bar"><div class="progress-fill ' + loadClass + '" style="width:' + load + '%"></div></div></td><td><span class="badge ' + status + '">' + statusMap[status] + '</span></td>' +
+            '<td><button class="btn-icon edit" onclick="editServer(\'' + s.id + '\')" title="编辑"><i class="fas fa-pen"></i></button>' +
+            '<button class="btn-icon delete" onclick="deleteServer(\'' + s.id + '\')" title="删除"><i class="fas fa-trash"></i></button></td></tr>';
+    }).join('');
+}
+
+function showAddServerModal() {
+    const html = '<div class="form-group"><label>服务器名称 *</label><input type="text" id="editSrvName" placeholder="例如：RackNerd-洛杉矶"></div>' +
+        '<div class="form-group"><label>地址 *</label><input type="text" id="editSrvAddr" placeholder="IP或域名"></div>' +
+        '<div class="form-group"><label>端口</label><input type="number" id="editSrvPort" value="8388"></div>' +
+        '<div class="form-group"><label>协议</label><select id="editSrvProtocol"><option value="Shadowsocks">Shadowsocks</option><option value="VMess">VMess</option><option value="Trojan">Trojan</option><option value="WireGuard">WireGuard</option><option value="OpenVPN">OpenVPN</option></select></div>' +
+        '<div class="form-group"><label>负载 (%)</label><input type="number" id="editSrvLoad" value="0" min="0" max="100"></div>' +
+        '<div class="form-group"><label>密码</label><input type="text" id="editSrvPassword" placeholder="服务器连接密码" value="' + generateStrongPassword(16) + '"></div>' +
+        '<button class="btn btn-primary" onclick="addServer()"><i class="fas fa-check"></i> 确认添加</button>';
+    openModal('添加服务器', html);
+}
+
+function addServer() {
+    const name = document.getElementById('editSrvName').value.trim();
+    const addr = document.getElementById('editSrvAddr').value.trim();
+    if (!name || !addr) { showToast('请填写名称和地址', 'error'); return; }
+    appData.servers.push({
+        id: generateId(),
+        name: name,
+        address: addr,
+        port: parseInt(document.getElementById('editSrvPort').value) || 8388,
+        protocol: document.getElementById('editSrvProtocol').value,
+        password: document.getElementById('editSrvPassword').value,
+        load: parseInt(document.getElementById('editSrvLoad').value) || 0,
+        online: true,
+        createdAt: new Date().toISOString()
+    });
+    saveData();
+    addActivity(name, '添加服务器', 'success');
+    closeModal();
+    renderServers();
+    renderDashboard();
+    showToast('服务器 ' + name + ' 添加成功', 'success');
+}
+
+function editServer(id) {
+    const s = appData.servers.find(x => x.id === id);
+    if (!s) return;
+    const html = '<div class="form-group"><label>服务器名称</label><input type="text" id="editSrvName" value="' + escapeHtml(s.name) + '"></div>' +
+        '<div class="form-group"><label>地址</label><input type="text" id="editSrvAddr" value="' + escapeHtml(s.address) + '"></div>' +
+        '<div class="form-group"><label>端口</label><input type="number" id="editSrvPort" value="' + s.port + '"></div>' +
+        '<div class="form-group"><label>协议</label><select id="editSrvProtocol">' + ['Shadowsocks','VMess','Trojan','WireGuard','OpenVPN'].map(p => '<option value="' + p + '"' + (s.protocol === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+        '<div class="form-group"><label>负载 (%)</label><input type="number" id="editSrvLoad" value="' + (s.load || 0) + '" min="0" max="100"></div>' +
+        '<div class="form-group"><label><input type="checkbox" id="editSrvOnline"' + (s.online !== false ? ' checked' : '') + '> 在线</label></div>' +
+        '<button class="btn btn-primary" onclick="saveServer(\'' + id + '\')"><i class="fas fa-check"></i> 保存</button>';
+    openModal('编辑服务器 - ' + escapeHtml(s.name), html);
+}
+
+function saveServer(id) {
+    const s = appData.servers.find(x => x.id === id);
+    if (!s) return;
+    s.name = document.getElementById('editSrvName').value.trim();
+    s.address = document.getElementById('editSrvAddr').value.trim();
+    s.port = parseInt(document.getElementById('editSrvPort').value) || 8388;
+    s.protocol = document.getElementById('editSrvProtocol').value;
+    s.load = parseInt(document.getElementById('editSrvLoad').value) || 0;
+    s.online = document.getElementById('editSrvOnline').checked;
+    saveData();
+    addActivity(s.name, '修改服务器信息', 'success');
+    closeModal();
+    renderServers();
+    renderDashboard();
+    showToast('服务器信息已更新', 'success');
+}
+
+function deleteServer(id) {
+    const s = appData.servers.find(x => x.id === id);
+    if (!s) return;
+    if (!confirm('确定要删除服务器 "' + s.name + '" 吗？')) return;
+    appData.servers = appData.servers.filter(x => x.id !== id);
+    appData.configs = appData.configs.filter(c => c.serverId !== id);
+    saveData();
+    addActivity(s.name, '删除服务器', 'success');
+    renderServers();
+    renderDashboard();
+    showToast('服务器已删除', 'info');
+}
+
+// ====== 配置管理（增强安全） ======
+function renderConfigs() {
+    const tbody = document.getElementById('configsBody');
+    if (appData.configs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">暂无配置，点击上方生成</td></tr>';
+        return;
+    }
+    tbody.innerHTML = appData.configs.map(c => {
+        const user = appData.users.find(u => u.id === c.userId);
+        const server = appData.servers.find(s => s.id === c.serverId);
+        const statusMap = { active: '启用', disabled: '停用' };
+        return '<tr><td>' + escapeHtml(c.name) + '</td><td>' + (user ? escapeHtml(user.name) : '已删除') + '</td><td>' + (server ? escapeHtml(server.name) : '已删除') + '</td><td>' + escapeHtml(c.protocol) + '</td><td>' + formatDate(c.createdAt) + '</td>' +
+            '<td><span class="badge ' + (c.disabled ? 'disabled' : 'active') + '">' + statusMap[c.disabled ? 'disabled' : 'active'] + '</span></td>' +
+            '<td><button class="btn-icon copy" onclick="viewConfig(\'' + c.id + '\')" title="查看配置"><i class="fas fa-eye"></i></button>' +
+            '<button class="btn-icon delete" onclick="deleteConfig(\'' + c.id + '\')" title="删除"><i class="fas fa-trash"></i></button></td></tr>';
+    }).join('');
+}
+
+function showAddConfigModal() {
+    if (appData.users.length === 0) { showToast('请先添加用户', 'error'); return; }
+    if (appData.servers.length === 0) { showToast('请先添加服务器', 'error'); return; }
+    const userOpts = appData.users.map(u => '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>').join('');
+    const srvOpts = appData.servers.map(s => '<option value="' + s.id + '">' + escapeHtml(s.name) + ' (' + escapeHtml(s.protocol) + ')</option>').join('');
+    const html = '<div class="form-group"><label>配置名称</label><input type="text" id="editCfgName" value="config-' + Date.now().toString(36) + '"></div>' +
+        '<div class="form-group"><label>用户 *</label><select id="editCfgUser">' + userOpts + '</select></div>' +
+        '<div class="form-group"><label>服务器 *</label><select id="editCfgServer">' + srvOpts + '</select></div>' +
+        '<button class="btn btn-primary" onclick="addConfig()"><i class="fas fa-check"></i> 生成配置</button>';
+    openModal('生成配置', html);
+}
+
+function addConfig() {
+    const userId = document.getElementById('editCfgUser').value;
+    const serverId = document.getElementById('editCfgServer').value;
+    const name = document.getElementById('editCfgName').value.trim() || ('config-' + Date.now().toString(36));
+    const server = appData.servers.find(s => s.id === serverId);
+    const user = appData.users.find(u => u.id === userId);
+    if (!server || !user) { showToast('请选择用户和服务器', 'error'); return; }
+    appData.configs.push({
+        id: generateId(),
+        name: name,
+        userId: userId,
+        serverId: serverId,
+        protocol: server.protocol,
+        content: generateConfigContent(user, server),
+        disabled: false,
+        createdAt: new Date().toISOString()
+    });
+    saveData();
+    addActivity(user.name, '生成 ' + server.protocol + ' 配置', 'success');
+    closeModal();
+    renderConfigs();
+    showToast('配置生成成功', 'success');
+}
+
+function generateConfigContent(user, server) {
+    const lines = [];
+    lines.push('# VPN Configuration');
+    lines.push('# User: ' + user.name);
+    lines.push('# Server: ' + server.name);
+    lines.push('# Generated: ' + new Date().toISOString());
+    lines.push('');
+    if (server.protocol === 'Shadowsocks') {
+        const password = server.password || ('pass_' + user.id.substr(0, 8));
+        lines.push('ss://' + btoa('aes-256-gcm:' + password + '@' + server.address + ':' + server.port));
+        lines.push('Method: aes-256-gcm');
+        lines.push('Password: ' + password);
+    } else if (server.protocol === 'VMess') {
+        lines.push('Protocol: VMess');
+        lines.push('Address: ' + server.address);
+        lines.push('Port: ' + server.port);
+        lines.push('UUID: ' + generateUUID(user.id));
+        lines.push('Encryption: auto');
+        lines.push('Network: tcp');
+    } else if (server.protocol === 'Trojan') {
+        lines.push('Protocol: Trojan');
+        lines.push('Address: ' + server.address);
+        lines.push('Port: ' + server.port);
+        lines.push('Password: ' + (server.password || 'trojan_' + user.id.substr(0, 12)));
+    } else {
+        lines.push('Protocol: ' + server.protocol);
+        lines.push('Address: ' + server.address);
+        lines.push('Port: ' + server.port);
+        lines.push('Username: ' + user.name);
+        lines.push('Password: ' + (server.password || user.id.substr(0, 16)));
+    }
+    return lines.join('\n');
+}
+
+function generateUUID(seed) {
+    const s = seed + Date.now().toString(36);
+    let hash = 0;
+    for (let i = 0; i < s.length; i++) { hash = ((hash << 5) - hash) + s.charCodeAt(i); hash |= 0; }
+    const hex = Math.abs(hash).toString(16).padStart(8, '0');
+    return hex.substr(0, 8) + '-' + hex.substr(0, 4) + '-4' + hex.substr(0, 3) + '-a' + hex.substr(0, 3) + '-' + hex.substr(0, 12);
+}
+
+function viewConfig(id) {
+    const c = appData.configs.find(x => x.id === id);
+    if (!c) return;
+    const user = appData.users.find(u => u.id === c.userId);
+    const html = '<div class="form-group"><label>配置名称</label><div>' + escapeHtml(c.name) + '</div></div>' +
+        '<div class="form-group"><label>用户</label><div>' + (user ? escapeHtml(user.name) : '已删除') + '</div></div>' +
+        '<div class="form-group"><label>协议</label><div>' + escapeHtml(c.protocol) + '</div></div>' +
+        '<div class="form-group"><label>配置内容</label><div class="config-block" id="configContentBlock">' + escapeHtml(c.content) + '</div></div>' +
+        '<button class="btn btn-secondary" onclick="copyConfigContent(\'' + id + '\')"><i class="fas fa-copy"></i> 复制配置</button>' +
+        '<button class="btn btn-secondary" onclick="downloadConfig(\'' + id + '\')" style="margin-left:8px"><i class="fas fa-download"></i> 下载配置</button>';
+    addAuditLog('查看配置', '配置: ' + c.name);
+    openModal('查看配置 - ' + escapeHtml(c.name), html);
+}
+
+function copyConfigContent(id) {
+    const c = appData.configs.find(x => x.id === id);
+    if (!c) return;
+    navigator.clipboard.writeText(c.content).then(() => {
+        showToast('配置已复制到剪贴板', 'success');
+        addAuditLog('复制配置', '配置: ' + c.name);
+    }).catch(() => {
+        const el = document.getElementById('configContentBlock');
+        if (el) {
+            const range = document.createRange();
+            range.selectNode(el);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            document.execCommand('copy');
+            window.getSelection().removeAllRanges();
+            showToast('配置已复制', 'success');
+            addAuditLog('复制配置', '配置: ' + c.name);
+        }
+    });
+}
+
+function downloadConfig(id) {
+    const c = appData.configs.find(x => x.id === id);
+    if (!c) return;
+    const blob = new Blob([c.content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = c.name + '.conf';
+    a.click();
+    URL.revokeObjectURL(url);
+    addAuditLog('下载配置', '配置: ' + c.name);
+    showToast('配置已下载', 'success');
+}
+
+function deleteConfig(id) {
+    if (!confirm('确定要删除此配置吗？')) return;
+    const c = appData.configs.find(x => x.id === id);
+    appData.configs = appData.configs.filter(x => x.id !== id);
+    saveData();
+    if (c) addActivity('系统', '删除配置 ' + c.name, 'success');
+    renderConfigs();
+    showToast('配置已删除', 'info');
+}
+
+function exportAllConfigs() {
+    if (appData.configs.length === 0) { showToast('暂无配置可导出', 'error'); return; }
+    const content = appData.configs.map(c => { return '# ====== ' + c.name + ' ======\n' + c.content; }).join('\n\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'vpn-configs-' + new Date().toISOString().split('T')[0] + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+    addAuditLog('批量导出', '导出 ' + appData.configs.length + ' 个配置');
+    showToast('已导出 ' + appData.configs.length + ' 个配置', 'success');
+}
+
+function getConfigForUser(userId) {
+    const user = appData.users.find(u => u.id === userId);
+    if (!user) return;
+    const configs = appData.configs.filter(c => c.userId === userId);
+    if (configs.length === 0) {
+        showToast('该用户暂无配置，请先生成', 'warning');
+        return;
+    }
+    viewConfig(configs[0].id);
+}
+
+// ====== 流量统计 ======
+function renderTraffic() {
+    const period = document.getElementById('trafficPeriod').value;
+    const userFilter = document.getElementById('trafficUser').value;
+    const sel = document.getElementById('trafficUser');
+    const currentVal = sel.value;
+    sel.innerHTML = '<option value="all">全部用户</option>' + appData.users.map(u => '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>').join('');
+    sel.value = currentVal;
+
+    let days = 7;
+    if (period === '24h') days = 1;
+    else if (period === '30d') days = 30;
+
+    const ctx = document.getElementById('trafficDetailChart');
+    if (trafficDetailChart) trafficDetailChart.destroy();
+
+    const labels = [];
+    const data = [];
+    for (let i = days - 1; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+        labels.push((d.getMonth() + 1) + '/' + d.getDate());
+        let records = appData.trafficRecords.filter(r => r.date === dateStr);
+        if (userFilter !== 'all') records = records.filter(r => r.userId === userFilter);
+        const total = records.reduce((s, r) => s + (r.upload || 0) + (r.download || 0), 0);
+        data.push(total / (1024*1024*1024));
+    }
+
+    trafficDetailChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: labels, datasets: [{ label: '流量 (GB)', data: data, backgroundColor: 'rgba(79,70,229,0.6)', borderColor: '#4f46e5', borderWidth: 1, borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => v.toFixed(1) + ' GB' } } } }
+    });
+
+    const rankBody = document.getElementById('trafficRankBody');
+    if (appData.users.length === 0) {
+        rankBody.innerHTML = '<tr><td colspan="5" class="text-center">暂无数据</td></tr>';
+        return;
+    }
+    const ranked = appData.users.map(u => {
+        const records = appData.trafficRecords.filter(r => r.userId === u.id);
+        const upload = records.reduce((s, r) => s + (r.upload || 0), 0);
+        const download = records.reduce((s, r) => s + (r.download || 0), 0);
+        return { name: u.name, upload: upload, download: download, total: upload + download };
+    }).sort((a, b) => b.total - a.total);
+
+    rankBody.innerHTML = ranked.map((r, i) => {
+        const medal = i === 0 ? '#' + (i + 1) : i === 1 ? '#' + (i + 1) : i === 2 ? '#' + (i + 1) : '#' + (i + 1);
+        return '<tr><td><strong>' + (i + 1) + '</strong></td><td>' + escapeHtml(r.name) + '</td><td>' + formatBytes(r.upload) + '</td><td>' + formatBytes(r.download) + '</td><td><strong>' + formatBytes(r.total) + '</strong></td></tr>';
+    }).join('');
+}
+
+// ====== 系统设置 ======
+function loadSettings() {
+    document.getElementById('siteName').value = appData.settings.siteName || 'VPN管理面板';
+    document.getElementById('defaultExpireDays').value = appData.settings.defaultExpireDays || 30;
+    document.getElementById('defaultTrafficLimit').value = appData.settings.defaultTrafficLimit || 100;
+    document.getElementById('notifyEmail').value = appData.settings.notifyEmail || '';
+}
+
+function saveSettings() {
+    appData.settings.siteName = document.getElementById('siteName').value;
+    appData.settings.defaultExpireDays = parseInt(document.getElementById('defaultExpireDays').value) || 30;
+    appData.settings.defaultTrafficLimit = parseInt(document.getElementById('defaultTrafficLimit').value) || 100;
+    appData.settings.notifyEmail = document.getElementById('notifyEmail').value;
+    saveData();
+    document.title = appData.settings.siteName + ' - VPN管理面板';
+    document.querySelector('.logo span').textContent = appData.settings.siteName;
+    showToast('设置已保存', 'success');
+    addAuditLog('修改系统设置', '站点名称: ' + appData.settings.siteName);
+}
+
+// ====== 数据导入导出 ======
+function exportData() {
+    const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'vpn-data-backup-' + new Date().toISOString().split('T')[0] + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    addAuditLog('导出数据', '完整数据备份');
+    showToast('数据已导出', 'success');
+}
+
+function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data.users || !data.servers) {
+                showToast('无效的数据文件', 'error');
+                return;
+            }
+            if (!confirm('导入将覆盖当前所有数据，确定继续吗？')) return;
+            appData = data;
+            saveData();
+            addAuditLog('导入数据', '从文件恢复数据');
+            showToast('数据导入成功', 'success');
+            renderDashboard();
+        } catch (err) {
+            showToast('文件解析失败: ' + err.message, 'error');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+function resetAllData() {
+    if (!confirm('确定要重置所有数据吗？此操作不可撤销！')) return;
+    if (!confirm('再次确认：所有用户、服务器、配置数据将被清除！')) return;
+    appData = JSON.parse(JSON.stringify(defaultData));
+    saveData();
+    addAuditLog('重置数据', '所有数据已清除');
+    renderDashboard();
+    showToast('所有数据已重置', 'info');
+}
+
+
+// ====== 防火墙管理 ======
+function getFirewallSettings() {
+    return {
+        enabled: localStorage.getItem('vpn_firewall_enabled') !== 'false',
+        allowedIPs: JSON.parse(localStorage.getItem('vpn_firewall_allowed_ips') || '[]'),
+        blockUnknown: localStorage.getItem('vpn_firewall_block_unknown') !== 'false',
+        logAttacks: localStorage.getItem('vpn_firewall_log_attacks') !== 'false',
+        maxAttempts: parseInt(localStorage.getItem('vpn_firewall_max_attempts')) || 5
+    };
+}
+
+function saveFirewallSettings(settings) {
+    localStorage.setItem('vpn_firewall_enabled', settings.enabled);
+    localStorage.setItem('vpn_firewall_allowed_ips', JSON.stringify(settings.allowedIPs));
+    localStorage.setItem('vpn_firewall_block_unknown', settings.blockUnknown);
+    localStorage.setItem('vpn_firewall_log_attacks', settings.logAttacks);
+    localStorage.setItem('vpn_firewall_max_attempts', settings.maxAttempts);
+    showToast('防火墙设置已保存', 'success');
+    addAuditLog('修改防火墙', '安全策略已更新');
+}
+
+function renderFirewallSettings() {
+    const settings = getFirewallSettings();
+    const enabledEl = document.getElementById('firewallEnabled');
+    const blockEl = document.getElementById('firewallBlockUnknown');
+    const logEl = document.getElementById('firewallLogAttacks');
+    const maxEl = document.getElementById('firewallMaxAttempts');
+    if (enabledEl) enabledEl.checked = settings.enabled;
+    if (blockEl) blockEl.checked = settings.blockUnknown;
+    if (logEl) logEl.checked = settings.logAttacks;
+    if (maxEl) maxEl.value = settings.maxAttempts;
+    renderAllowedIPs();
+}
+
+function renderAllowedIPs() {
+    const settings = getFirewallSettings();
+    const container = document.getElementById('allowedIPsList');
+    if (!container) return;
+    if (settings.allowedIPs.length === 0) {
+        container.innerHTML = '<div style="font-size:13px;color:var(--text-muted);padding:8px 0">暂无IP白名单，添加您的IP以增强安全性</div>';
+        return;
+    }
+    container.innerHTML = settings.allowedIPs.map(function(ip, i) {
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+            '<span style="flex:1;font-size:13px;font-family:monospace">' + escapeHtml(ip) + '</span>' +
+            '<button class="btn-icon delete" onclick="removeAllowedIP(' + i + ')" title="移除"><i class="fas fa-times"></i></button></div>';
+    }).join('');
+}
+
+function addAllowedIP() {
+    const ip = document.getElementById('newAllowedIP').value.trim();
+    if (!ip) { showToast('请输入IP地址', 'error'); return; }
+    const settings = getFirewallSettings();
+    if (settings.allowedIPs.indexOf(ip) !== -1) { showToast('该IP已在白名单中', 'warning'); return; }
+    settings.allowedIPs.push(ip);
+    saveFirewallSettings(settings);
+    document.getElementById('newAllowedIP').value = '';
+    renderAllowedIPs();
+    addAuditLog('添加白名单IP', ip);
+}
+
+function removeAllowedIP(index) {
+    const settings = getFirewallSettings();
+    const removed = settings.allowedIPs.splice(index, 1)[0];
+    saveFirewallSettings(settings);
+    renderAllowedIPs();
+    addAuditLog('移除白名单IP', removed);
+}
+
+function applyFirewallSettings() {
+    const settings = {
+        enabled: document.getElementById('firewallEnabled').checked,
+        allowedIPs: getFirewallSettings().allowedIPs,
+        blockUnknown: document.getElementById('firewallBlockUnknown').checked,
+        logAttacks: document.getElementById('firewallLogAttacks').checked,
+        maxAttempts: parseInt(document.getElementById('firewallMaxAttempts').value) || 5
+    };
+    saveFirewallSettings(settings);
+    showToast('防火墙规则已更新，非白名单IP将被拦截', 'success');
+}
+
+// ====== 安全审计日志查看 ======
+function showAuditLogs() {
+    const logs = JSON.parse(localStorage.getItem('vpn_audit_logs') || '[]');
+    if (logs.length === 0) {
+        openModal('安全审计日志', '<div class="text-center" style="padding:20px;color:var(--text-muted)">暂无审计记录</div>');
+        return;
+    }
+    const html = '<div style="max-height:400px;overflow-y:auto">' +
+        '<table style="width:100%;font-size:12px;border-collapse:collapse">' +
+        '<thead><tr style="border-bottom:2px solid var(--border)">' +
+        '<th style="padding:6px 8px;text-align:left">时间</th>' +
+        '<th style="padding:6px 8px;text-align:left">操作</th>' +
+        '<th style="padding:6px 8px;text-align:left">详情</th></tr></thead><tbody>' +
+        logs.slice(0, 50).map(function(l) {
+            return '<tr style="border-bottom:1px solid var(--border)">' +
+                '<td style="padding:6px 8px;font-size:11px">' + formatDate(l.time) + '</td>' +
+                '<td style="padding:6px 8px">' + escapeHtml(l.operation) + '</td>' +
+                '<td style="padding:6px 8px;font-size:11px;color:var(--text-secondary)">' + escapeHtml(l.detail) + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+        '<button class="btn btn-danger btn-sm" onclick="clearAuditLogs()" style="margin-top:12px"><i class="fas fa-trash"></i> 清除日志</button>';
+    openModal('安全审计日志 (' + logs.length + '条)', html);
+}
+
+function clearAuditLogs() {
+    if (!confirm('确定要清除所有审计日志吗？')) return;
+    localStorage.setItem('vpn_audit_logs', '[]');
+    closeModal();
+    showToast('审计日志已清除', 'info');
+}
+
+// ====== 订阅管理 ======
+function renderSubscription() {
+    // 检测服务器状态
+    checkServerStatus();
+
+    // 渲染用户订阅列表
+    renderSubscriptionUserList();
+}
+
+function renderSubscriptionUserList() {
+    var container = document.getElementById('subscriptionUserList');
+    if (!container) return;
+
+    // 找出有配置的用户
+    var usersWithConfigs = {};
+    appData.configs.forEach(function(c) {
+        if (!c.disabled) usersWithConfigs[c.userId] = true;
+    });
+
+    var activeUsers = appData.users.filter(function(u) {
+        return usersWithConfigs[u.id] && getUserStatus(u) !== 'disabled';
+    });
+
+    if (activeUsers.length === 0) {
+        container.innerHTML = '<p style="font-size:13px;color:var(--text-muted);padding:20px;text-align:center">暂无配置了代理的用户。请先在"配置管理"中为用户生成配置。</p>';
+        return;
+    }
+
+    var baseUrl = document.getElementById('serverBaseUrl').value || 'http://localhost:3456';
+    var html = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>' +
+        '<th>用户</th><th>订阅链接</th><th>配置数</th><th>操作</th></tr></thead><tbody>';
+
+    activeUsers.forEach(function(u) {
+        var configCount = appData.configs.filter(function(c) {
+            return c.userId === u.id && !c.disabled;
+        }).length;
+        var subUrl = getSubscriptionUrl(u.id, baseUrl);
+
+        html += '<tr>' +
+            '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
+            '<td><code style="font-size:11px;word-break:break-all">' + escapeHtml(subUrl) + '</code></td>' +
+            '<td>' + configCount + '</td>' +
+            '<td>' +
+                '<button class="btn btn-secondary btn-sm" onclick="copySubscriptionUrl(\'' + u.id + '\')" style="margin-right:4px"><i class="fas fa-copy"></i> 复制</button>' +
+                '<button class="btn btn-secondary btn-sm" onclick="exportClashYamlForUser(\'' + u.id + '\')"><i class="fas fa-download"></i> YAML</button>' +
+            '</td></tr>';
+    });
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+function exportClashYamlAll() {
+    if (appData.configs.length === 0) {
+        showToast('暂无配置，请先生成VPN配置', 'error');
+        return;
+    }
+
+    var yaml = generateClashYaml(appData.configs, appData.users, appData.servers, null);
+
+    // 弹窗显示
+    var html = '<div class="form-group"><label>Clash YAML 配置</label>' +
+        '<textarea readonly style="width:100%;height:350px;font-family:monospace;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;resize:vertical">' +
+        escapeHtml(yaml) +
+        '</textarea></div>' +
+        '<button class="btn btn-primary" onclick="copyClashYamlAll()"><i class="fas fa-copy"></i> 复制到剪贴板</button>' +
+        '<button class="btn btn-secondary" onclick="downloadClashYamlAll()" style="margin-left:8px"><i class="fas fa-download"></i> 下载 YAML</button>';
+
+    // 保存最新生成的 YAML 用于复制/下载
+    window._latestClashYaml = yaml;
+
+    openModal('Clash YAML 配置导出', html);
+    addAuditLog('导出Clash配置', '导出所有配置为Clash YAML');
+}
+
+function copyClashYamlAll() {
+    if (!window._latestClashYaml) return;
+    navigator.clipboard.writeText(window._latestClashYaml).then(function() {
+        showToast('Clash配置已复制到剪贴板，可直接粘贴到Clash Verge中', 'success');
+    }).catch(function() {
+        showToast('复制失败，请手动选择文本复制', 'error');
+    });
+}
+
+function downloadClashYamlAll() {
+    if (!window._latestClashYaml) return;
+    var blob = new Blob([window._latestClashYaml], { type: 'text/yaml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'clash-config-' + new Date().toISOString().split('T')[0] + '.yaml';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Clash配置文件已下载', 'success');
+}
+
+function exportClashYamlForUser(userId) {
+    var user = appData.users.find(function(u) { return u.id === userId; });
+    if (!user) return;
+
+    var yaml = generateClashYaml(appData.configs, appData.users, appData.servers, userId);
+
+    var html = '<div class="form-group"><label>用户：' + escapeHtml(user.name) + ' 的 Clash 配置</label>' +
+        '<textarea readonly style="width:100%;height:350px;font-family:monospace;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;resize:vertical">' +
+        escapeHtml(yaml) +
+        '</textarea></div>' +
+        '<button class="btn btn-primary" onclick="copyClashYamlAll()"><i class="fas fa-copy"></i> 复制</button>' +
+        '<button class="btn btn-secondary" onclick="downloadClashYamlAll()" style="margin-left:8px"><i class="fas fa-download"></i> 下载</button>';
+
+    window._latestClashYaml = yaml;
+
+    openModal('Clash配置 - ' + escapeHtml(user.name), html);
+    addAuditLog('导出用户Clash配置', '用户: ' + user.name);
+}
+
+function showSubscriptionUrl(userId) {
+    var user = appData.users.find(function(u) { return u.id === userId; });
+    if (!user) return;
+
+    var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
+    var subUrl = getSubscriptionUrl(userId, baseUrl);
+    var configCount = appData.configs.filter(function(c) { return c.userId === userId && !c.disabled; }).length;
+
+    if (configCount === 0) {
+        showToast('该用户暂无有效配置，请在"配置管理"中生成', 'warning');
+        return;
+    }
+
+    var html = '<div style="padding:8px 0">' +
+        '<div class="form-group"><label>用户</label><div>' + escapeHtml(user.name) + '</div></div>' +
+        '<div class="form-group"><label>有效配置数</label><div>' + configCount + ' 个节点</div></div>' +
+        '<div class="form-group"><label>订阅链接</label>' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+        '<code style="flex:1;background:var(--bg);padding:10px;border-radius:var(--radius-sm);font-size:13px;word-break:break-all">' + escapeHtml(subUrl) + '</code>' +
+        '</div></div>' +
+        '<div class="form-group"><label>使用方式</label>' +
+        '<ol style="font-size:13px;color:var(--text-secondary);padding-left:20px;line-height:1.8">' +
+        '<li>确保订阅服务器已启动（<code>node server.js</code>）</li>' +
+        '<li>确保已点击"同步数据到服务器"</li>' +
+        '<li>在 Clash Verge 中，进入"配置" → 粘贴上述订阅链接 → 下载</li>' +
+        '<li>或者直接复制下方YAML配置到Clash Verge</li>' +
+        '</ol></div>' +
+        '<button class="btn btn-primary" onclick="copySubscriptionUrl(\'' + userId + '\');closeModal()"><i class="fas fa-copy"></i> 复制订阅链接</button>' +
+        '<button class="btn btn-secondary" onclick="closeModal();exportClashYamlForUser(\'' + userId + '\')" style="margin-left:8px"><i class="fas fa-file-code"></i> 导出YAML</button>' +
+        '</div>';
+
+    window._latestSubUrl = subUrl;
+
+    openModal('订阅链接 - ' + escapeHtml(user.name), html);
+    addAuditLog('查看订阅链接', '用户: ' + user.name);
+}
+
+function copySubscriptionUrl(userId) {
+    var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
+    var subUrl = window._latestSubUrl || getSubscriptionUrl(userId, baseUrl);
+
+    navigator.clipboard.writeText(subUrl).then(function() {
+        showToast('订阅链接已复制！粘贴到 Clash Verge → 配置 → 订阅 中使用', 'success');
+        addAuditLog('复制订阅链接', 'URL已复制');
+    }).catch(function() {
+        showToast('复制失败，请手动复制', 'error');
+    });
+}
+
+function syncDataToServer() {
+    var baseUrl = document.getElementById('serverBaseUrl').value || 'http://localhost:3456';
+    var btn = document.getElementById('btnSyncServer');
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 同步中...';
+    }
+
+    fetch(baseUrl + '/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(appData)
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            showToast('数据已同步到订阅服务器！现在可以在Clash Verge中使用订阅链接了', 'success');
+            addAuditLog('同步数据到服务器', 'users:' + appData.users.length + ' configs:' + appData.configs.length);
+            updateServerStatus(true);
+        } else {
+            showToast('同步失败: ' + (data.error || '未知错误'), 'error');
+        }
+    })
+    .catch(function(err) {
+        showToast('无法连接到订阅服务器 (' + baseUrl + ')，请先运行 node server.js', 'error');
+        updateServerStatus(false);
+    })
+    .finally(function() {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> 同步数据到服务器';
+        }
+    });
+}
+
+function checkServerStatus() {
+    var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
+
+    fetch(baseUrl + '/api/status')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+        if (data.status === 'running') {
+            updateServerStatus(true);
+            showToast('订阅服务器已连接 (端口: ' + data.port + ', 配置数: ' + data.configs + ')', 'success');
+        } else {
+            updateServerStatus(false);
+        }
+    })
+    .catch(function() {
+        updateServerStatus(false);
+    });
+}
+
+function updateServerStatus(online) {
+    var statusEl = document.getElementById('serverStatus');
+    if (!statusEl) return;
+    var dot = statusEl.querySelector('.status-dot');
+    if (online) {
+        dot.className = 'status-dot online';
+        statusEl.lastChild.textContent = ' 服务器已连接';
+    } else {
+        dot.className = 'status-dot offline';
+        statusEl.lastChild.textContent = ' 服务器未连接';
+    }
+}
+
+// ====== 会话超时保护 ======
+let sessionTimeout = null;
+
+function resetSessionTimeout() {
+    if (sessionTimeout) clearTimeout(sessionTimeout);
+    sessionTimeout = setTimeout(function() {
+        showToast('会话已超时，请刷新页面', 'warning');
+        localStorage.setItem('vpn_session_expired', 'true');
+    }, 30 * 60 * 1000);
+}
+
+document.addEventListener('click', resetSessionTimeout);
+document.addEventListener('keydown', resetSessionTimeout);
+document.addEventListener('mousemove', resetSessionTimeout);
+
+// ====== 数据迁移助手 ======
+function hasAppData() {
+    return appData.users.length > 0 || appData.servers.length > 0 || appData.configs.length > 0;
+}
+
+function showMigrationGuide() {
+    // 仅在 HTTP 模式下且无数据时显示
+    if (!window.location.protocol.startsWith('http') || hasAppData()) return;
+
+    var html = '<div style="padding:8px 0">' +
+        '<div style="background:var(--primary-light);border:1px solid var(--primary);border-radius:var(--radius-sm);padding:16px;margin-bottom:16px">' +
+        '<p style="font-weight:bold;color:var(--primary);margin-bottom:8px"><i class="fas fa-info-circle"></i> 首次使用？从旧版迁移数据</p>' +
+        '<p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">你的数据存在之前双击 index.html 打开的版本里，需要迁移过来：</p>' +
+        '<ol style="font-size:13px;color:var(--text-secondary);padding-left:20px;line-height:2">' +
+        '<li>在文件管理器中双击 <code style="background:var(--bg);padding:2px 6px;border-radius:3px">index.html</code> 打开旧版</li>' +
+        '<li>点击左侧 <b>系统设置</b> → 点击 <b>导出数据</b>，保存 JSON 文件</li>' +
+        '<li>回到本页面 → <b>系统设置</b> → 点击 <b>导入数据</b>，选择刚才的 JSON 文件</li>' +
+        '</ol>' +
+        '<p style="font-size:12px;color:var(--text-muted)">只需操作一次，之后通过本页面使用即可，数据会自动同步到服务器。</p>' +
+        '</div></div>';
+
+    document.querySelector('.page#page-dashboard .stats-grid').insertAdjacentHTML('beforebegin',
+        '<div class="card migration-card" style="margin-bottom:16px;border-left:4px solid var(--primary)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+        '<div style="flex:1">' + html.replace('<div style="padding:8px 0">', '').replace('</div></div>', '') + '</div>' +
+        '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);padding:0 4px">&times;</button>' +
+        '</div></div>'
+    );
+}
+
+// ====== 初始化 ======
+function init() {
+    // 如果通过 HTTP 访问且本地无数据，尝试从服务器加载
+    var isHttp = window.location.protocol.startsWith('http');
+    var hasLocalData = appData.users.length > 0 || appData.servers.length > 0 || appData.configs.length > 0;
+
+    if (isHttp && !hasLocalData) {
+        var baseUrl = window.location.protocol + '//' + window.location.host;
+        fetch(baseUrl + '/api/data')
+            .then(function(res) { return res.json(); })
+            .then(function(serverData) {
+                if (serverData && (serverData.users.length > 0 || serverData.servers.length > 0)) {
+                    for (var key in defaultData) {
+                        if (serverData[key]) appData[key] = serverData[key];
+                    }
+                    saveData();
+                    showToast('已从服务器加载 ' + serverData.users.length + ' 个用户, ' + serverData.servers.length + ' 台服务器', 'success');
+                }
+                finishInit();
+            })
+            .catch(function() {
+                finishInit();
+            });
+    } else {
+        finishInit();
+    }
+
+    function finishInit() {
+        renderDashboard();
+        loadSettings();
+        renderFirewallSettings();
+        document.querySelector('.logo span').textContent = appData.settings.siteName || 'VPN管理';
+        document.title = (appData.settings.siteName || 'VPN管理') + ' - 管理面板';
+        resetSessionTimeout();
+
+        // 数据迁移提示：HTTP 模式下无数据显示迁移引导
+        if (isHttp && !hasAppData()) {
+            setTimeout(showMigrationGuide, 800);
+        }
+
+        if (localStorage.getItem('vpn_session_expired') === 'true') {
+            showToast('检测到会话可能已泄露，建议导出数据后重置', 'warning');
+            localStorage.removeItem('vpn_session_expired');
+        }
+
+        addAuditLog('系统启动', '管理面板已加载');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', init);
