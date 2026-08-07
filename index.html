@@ -160,6 +160,7 @@
                     <div class="section-toolbar">
                         <button class="btn btn-primary" onclick="showAddConfigModal()"><i class="fas fa-plus"></i> 生成配置</button>
                         <button class="btn btn-secondary" onclick="exportAllConfigs()"><i class="fas fa-download"></i> 批量导出</button>
+                        <button class="btn btn-danger" onclick="clearAllConfigs()"><i class="fas fa-broom"></i> 清空所有配置</button>
                     </div>
                     <div class="card">
                         <table class="data-table">
@@ -171,6 +172,7 @@
                 <section id="page-subscription" class="page">
                     <div class="section-toolbar">
                         <button class="btn btn-primary" onclick="exportClashYamlAll()"><i class="fas fa-file-code"></i> 导出Clash YAML</button>
+                        <button class="btn btn-primary" onclick="exportV2rayNSubscriptionAll()"><i class="fas fa-file-code"></i> 导出v2rayN链接</button>
                         <button class="btn btn-secondary" id="btnSyncServer" onclick="syncDataToServer()"><i class="fas fa-cloud-upload-alt"></i> 同步数据到服务器</button>
                         <span id="serverStatus" style="margin-left:12px;font-size:13px;display:flex;align-items:center;gap:6px">
                             <span class="status-dot offline"></span> 服务器未连接
@@ -194,6 +196,7 @@
                         <p style="margin-top:12px;font-size:12px;color:var(--text-muted)">
                             <i class="fas fa-info-circle"></i> 在项目目录中运行 <code>npm start</code> 或 <code>node server.js</code> 启动订阅服务器。
                             启动后点击"检测"确认连接，然后点击"同步数据到服务器"。
+                            支持两种订阅格式：<strong>Clash</strong>（YAML）和 <strong>v2rayN</strong>（链接列表）。
                         </p>
                     </div>
                     <div class="card">
@@ -247,6 +250,7 @@
                             <button class="btn btn-secondary" onclick="exportData()"><i class="fas fa-file-export"></i> 导出数据</button>
                             <button class="btn btn-secondary" onclick="document.getElementById('importFileInput').click()"><i class="fas fa-file-import"></i> 导入数据</button>
                             <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importData(event)">
+                            <button class="btn btn-warning" onclick="clearAllConfigs()"><i class="fas fa-broom"></i> 清空所有配置</button>
                             <button class="btn btn-danger" onclick="resetAllData()"><i class="fas fa-trash-can"></i> 重置所有数据</button>
                         </div>
                     </div>

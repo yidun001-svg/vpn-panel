@@ -342,6 +342,9 @@ body {
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #dc2626; }
 
+.btn-warning { background: var(--warning); color: #fff; }
+.btn-warning:hover { background: #d97706; }
+
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 
 .btn-icon {

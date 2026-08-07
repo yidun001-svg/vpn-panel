@@ -57,7 +57,7 @@ let trafficChart = null, serverChart = null, trafficDetailChart = null;
 
 // ====== 工具函数 ======
 function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+    return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
 }
 
 function formatDate(d) {
@@ -485,9 +485,11 @@ function showAddServerModal() {
     const html = '<div class="form-group"><label>服务器名称 *</label><input type="text" id="editSrvName" placeholder="例如：RackNerd-洛杉矶"></div>' +
         '<div class="form-group"><label>地址 *</label><input type="text" id="editSrvAddr" placeholder="IP或域名"></div>' +
         '<div class="form-group"><label>端口</label><input type="number" id="editSrvPort" value="8388"></div>' +
-        '<div class="form-group"><label>协议</label><select id="editSrvProtocol"><option value="Shadowsocks">Shadowsocks</option><option value="VMess">VMess</option><option value="Trojan">Trojan</option><option value="WireGuard">WireGuard</option><option value="OpenVPN">OpenVPN</option></select></div>' +
+        '<div class="form-group"><label>协议</label><select id="editSrvProtocol" onchange="toggleWireGuardFields()"><option value="Shadowsocks">Shadowsocks</option><option value="VMess">VMess</option><option value="Trojan">Trojan</option><option value="WireGuard">WireGuard</option><option value="OpenVPN">OpenVPN</option></select></div>' +
         '<div class="form-group"><label>负载 (%)</label><input type="number" id="editSrvLoad" value="0" min="0" max="100"></div>' +
         '<div class="form-group"><label>密码</label><input type="text" id="editSrvPassword" placeholder="服务器连接密码" value="' + generateStrongPassword(16) + '"></div>' +
+        '<div class="form-group wg-only" style="display:none"><label>WireGuard 服务器公钥</label><input type="text" id="editSrvWgPubKey" placeholder="部署脚本输出的 Server Public Key"></div>' +
+        '<div class="form-group wg-only" style="display:none"><label>WireGuard DNS</label><input type="text" id="editSrvWgDns" value="1.1.1.1, 8.8.8.8" placeholder="1.1.1.1, 8.8.8.8"></div>' +
         '<button class="btn btn-primary" onclick="addServer()"><i class="fas fa-check"></i> 确认添加</button>';
     openModal('添加服务器', html);
 }
@@ -496,17 +498,28 @@ function addServer() {
     const name = document.getElementById('editSrvName').value.trim();
     const addr = document.getElementById('editSrvAddr').value.trim();
     if (!name || !addr) { showToast('请填写名称和地址', 'error'); return; }
-    appData.servers.push({
+    const protocol = document.getElementById('editSrvProtocol').value;
+    const server = {
         id: generateId(),
         name: name,
         address: addr,
         port: parseInt(document.getElementById('editSrvPort').value) || 8388,
-        protocol: document.getElementById('editSrvProtocol').value,
+        protocol: protocol,
         password: document.getElementById('editSrvPassword').value,
         load: parseInt(document.getElementById('editSrvLoad').value) || 0,
         online: true,
         createdAt: new Date().toISOString()
-    });
+    };
+    // WireGuard 专用字段
+    if (protocol === 'WireGuard') {
+        var wgPubKey = document.getElementById('editSrvWgPubKey');
+        var wgDns = document.getElementById('editSrvWgDns');
+        server.wireguard = {
+            publicKey: wgPubKey ? wgPubKey.value.trim() : '',
+            dns: wgDns ? wgDns.value.trim() : '1.1.1.1, 8.8.8.8'
+        };
+    }
+    appData.servers.push(server);
     saveData();
     addActivity(name, '添加服务器', 'success');
     closeModal();
@@ -518,12 +531,18 @@ function addServer() {
 function editServer(id) {
     const s = appData.servers.find(x => x.id === id);
     if (!s) return;
+    var wg = s.wireguard || {};
+    var wgPubKey = escapeHtml(wg.publicKey || '');
+    var wgDns = escapeHtml(wg.dns || '1.1.1.1, 8.8.8.8');
+    var wgStyle = s.protocol === 'WireGuard' ? '' : 'style="display:none"';
     const html = '<div class="form-group"><label>服务器名称</label><input type="text" id="editSrvName" value="' + escapeHtml(s.name) + '"></div>' +
         '<div class="form-group"><label>地址</label><input type="text" id="editSrvAddr" value="' + escapeHtml(s.address) + '"></div>' +
         '<div class="form-group"><label>端口</label><input type="number" id="editSrvPort" value="' + s.port + '"></div>' +
-        '<div class="form-group"><label>协议</label><select id="editSrvProtocol">' + ['Shadowsocks','VMess','Trojan','WireGuard','OpenVPN'].map(p => '<option value="' + p + '"' + (s.protocol === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+        '<div class="form-group"><label>协议</label><select id="editSrvProtocol" onchange="toggleWireGuardFields()">' + ['Shadowsocks','VMess','Trojan','WireGuard','OpenVPN'].map(p => '<option value="' + p + '"' + (s.protocol === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
         '<div class="form-group"><label>负载 (%)</label><input type="number" id="editSrvLoad" value="' + (s.load || 0) + '" min="0" max="100"></div>' +
         '<div class="form-group"><label><input type="checkbox" id="editSrvOnline"' + (s.online !== false ? ' checked' : '') + '> 在线</label></div>' +
+        '<div class="form-group wg-only" ' + wgStyle + '><label>WireGuard 服务器公钥</label><input type="text" id="editSrvWgPubKey" value="' + wgPubKey + '" placeholder="部署脚本输出的 Server Public Key"></div>' +
+        '<div class="form-group wg-only" ' + wgStyle + '><label>WireGuard DNS</label><input type="text" id="editSrvWgDns" value="' + wgDns + '" placeholder="1.1.1.1, 8.8.8.8"></div>' +
         '<button class="btn btn-primary" onclick="saveServer(\'' + id + '\')"><i class="fas fa-check"></i> 保存</button>';
     openModal('编辑服务器 - ' + escapeHtml(s.name), html);
 }
@@ -537,12 +556,41 @@ function saveServer(id) {
     s.protocol = document.getElementById('editSrvProtocol').value;
     s.load = parseInt(document.getElementById('editSrvLoad').value) || 0;
     s.online = document.getElementById('editSrvOnline').checked;
+    // WireGuard 专用字段
+    if (s.protocol === 'WireGuard') {
+        var wgPubKey = document.getElementById('editSrvWgPubKey');
+        var wgDns = document.getElementById('editSrvWgDns');
+        s.wireguard = {
+            publicKey: wgPubKey ? wgPubKey.value.trim() : '',
+            dns: wgDns ? wgDns.value.trim() : '1.1.1.1, 8.8.8.8'
+        };
+    } else {
+        delete s.wireguard;
+    }
     saveData();
     addActivity(s.name, '修改服务器信息', 'success');
     closeModal();
     renderServers();
     renderDashboard();
     showToast('服务器信息已更新', 'success');
+}
+
+// ====== WireGuard 字段显示切换 ======
+function toggleWireGuardFields() {
+    var protocol = document.getElementById('editSrvProtocol');
+    var wgFields = document.querySelectorAll('.wg-only');
+    var show = protocol && protocol.value === 'WireGuard';
+    wgFields.forEach(function(el) { el.style.display = show ? '' : 'none'; });
+}
+
+// ====== 配置表单 WireGuard 字段切换 ======
+function toggleCfgWgFields() {
+    var sel = document.getElementById('editCfgServer');
+    if (!sel) return;
+    var opt = sel.options[sel.selectedIndex];
+    var isWG = opt && opt.getAttribute('data-protocol') === 'WireGuard';
+    var fields = document.querySelectorAll('.cfg-wg-only');
+    fields.forEach(function(el) { el.style.display = isWG ? '' : 'none'; });
 }
 
 function deleteServer(id) {
@@ -580,10 +628,12 @@ function showAddConfigModal() {
     if (appData.users.length === 0) { showToast('请先添加用户', 'error'); return; }
     if (appData.servers.length === 0) { showToast('请先添加服务器', 'error'); return; }
     const userOpts = appData.users.map(u => '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>').join('');
-    const srvOpts = appData.servers.map(s => '<option value="' + s.id + '">' + escapeHtml(s.name) + ' (' + escapeHtml(s.protocol) + ')</option>').join('');
+    const srvOpts = appData.servers.map(s => '<option value="' + s.id + '" data-protocol="' + escapeHtml(s.protocol) + '">' + escapeHtml(s.name) + ' (' + escapeHtml(s.protocol) + ')</option>').join('');
     const html = '<div class="form-group"><label>配置名称</label><input type="text" id="editCfgName" value="config-' + Date.now().toString(36) + '"></div>' +
         '<div class="form-group"><label>用户 *</label><select id="editCfgUser">' + userOpts + '</select></div>' +
-        '<div class="form-group"><label>服务器 *</label><select id="editCfgServer">' + srvOpts + '</select></div>' +
+        '<div class="form-group"><label>服务器 *</label><select id="editCfgServer" onchange="toggleCfgWgFields()">' + srvOpts + '</select></div>' +
+        '<div class="form-group cfg-wg-only" style="display:none"><label>WireGuard 客户端私钥 *</label><input type="text" id="editCfgWgPrivKey" placeholder="部署脚本输出的 Client Private Key"></div>' +
+        '<div class="form-group cfg-wg-only" style="display:none"><label>WireGuard 客户端地址</label><input type="text" id="editCfgWgAddr" value="10.66.66.2/24" placeholder="例如: 10.66.66.2/24"></div>' +
         '<button class="btn btn-primary" onclick="addConfig()"><i class="fas fa-check"></i> 生成配置</button>';
     openModal('生成配置', html);
 }
@@ -595,16 +645,34 @@ function addConfig() {
     const server = appData.servers.find(s => s.id === serverId);
     const user = appData.users.find(u => u.id === userId);
     if (!server || !user) { showToast('请选择用户和服务器', 'error'); return; }
-    appData.configs.push({
+    // WireGuard 客户端字段
+    var wgConfig = null;
+    if (server.protocol === 'WireGuard') {
+        var wgPrivKey = document.getElementById('editCfgWgPrivKey');
+        var wgAddr = document.getElementById('editCfgWgAddr');
+        if (!wgPrivKey || !wgPrivKey.value.trim()) {
+            showToast('WireGuard 协议需要填写客户端私钥', 'error');
+            return;
+        }
+        wgConfig = {
+            privateKey: wgPrivKey.value.trim(),
+            address: wgAddr ? wgAddr.value.trim() : '10.66.66.2/24'
+        };
+    }
+    var configObj = {
         id: generateId(),
         name: name,
         userId: userId,
         serverId: serverId,
         protocol: server.protocol,
-        content: generateConfigContent(user, server),
+        content: generateConfigContent(user, server, wgConfig),
         disabled: false,
         createdAt: new Date().toISOString()
-    });
+    };
+    if (wgConfig) {
+        configObj.wireguard = wgConfig;
+    }
+    appData.configs.push(configObj);
     saveData();
     addActivity(user.name, '生成 ' + server.protocol + ' 配置', 'success');
     closeModal();
@@ -612,7 +680,7 @@ function addConfig() {
     showToast('配置生成成功', 'success');
 }
 
-function generateConfigContent(user, server) {
+function generateConfigContent(user, server, wgConfig) {
     const lines = [];
     lines.push('# VPN Configuration');
     lines.push('# User: ' + user.name);
@@ -620,8 +688,8 @@ function generateConfigContent(user, server) {
     lines.push('# Generated: ' + new Date().toISOString());
     lines.push('');
     if (server.protocol === 'Shadowsocks') {
-        const password = server.password || ('pass_' + user.id.substr(0, 8));
-        lines.push('ss://' + btoa('aes-256-gcm:' + password + '@' + server.address + ':' + server.port));
+        const password = server.password || ('pass_' + user.id.substring(0, 8));
+        lines.push('ss://' + btoa('aes-256-gcm:' + encodeURIComponent(password)) + '@' + server.address + ':' + server.port);
         lines.push('Method: aes-256-gcm');
         lines.push('Password: ' + password);
     } else if (server.protocol === 'VMess') {
@@ -635,23 +703,67 @@ function generateConfigContent(user, server) {
         lines.push('Protocol: Trojan');
         lines.push('Address: ' + server.address);
         lines.push('Port: ' + server.port);
-        lines.push('Password: ' + (server.password || 'trojan_' + user.id.substr(0, 12)));
+        lines.push('Password: ' + (server.password || 'trojan_' + user.id.substring(0, 12)));
+    } else if (server.protocol === 'WireGuard') {
+        // 生成标准的 WireGuard 客户端配置文件
+        var wg = wgConfig || {};
+        var srvWg = server.wireguard || {};
+        lines.push('[Interface]');
+        lines.push('PrivateKey = ' + (wg.privateKey || 'YOUR_CLIENT_PRIVATE_KEY'));
+        lines.push('Address = ' + (wg.address || '10.66.66.2/24'));
+        lines.push('DNS = ' + (srvWg.dns || '1.1.1.1, 8.8.8.8'));
+        lines.push('');
+        lines.push('[Peer]');
+        lines.push('PublicKey = ' + (srvWg.publicKey || 'YOUR_SERVER_PUBLIC_KEY'));
+        lines.push('Endpoint = ' + server.address + ':' + server.port);
+        lines.push('AllowedIPs = 0.0.0.0/0, ::/0');
+        lines.push('PersistentKeepalive = 25');
+    } else if (server.protocol === 'OpenVPN') {
+        lines.push('# OpenVPN 客户端配置模板');
+        lines.push('# 请根据服务器端生成的 .ovpn 文件填写以下内容');
+        lines.push('client');
+        lines.push('dev tun');
+        lines.push('proto udp');
+        lines.push('remote ' + server.address + ' ' + server.port);
+        lines.push('resolv-retry infinite');
+        lines.push('nobind');
+        lines.push('persist-key');
+        lines.push('persist-tun');
+        lines.push('remote-cert-tls server');
+        lines.push('cipher AES-256-GCM');
+        lines.push('auth SHA256');
+        lines.push('verb 3');
+        lines.push('# 请将服务器生成的 <ca>, <cert>, <key>, <tls-auth> 部分粘贴到下方');
     } else {
         lines.push('Protocol: ' + server.protocol);
         lines.push('Address: ' + server.address);
         lines.push('Port: ' + server.port);
         lines.push('Username: ' + user.name);
-        lines.push('Password: ' + (server.password || user.id.substr(0, 16)));
+        lines.push('Password: ' + (server.password || user.id.substring(0, 16)));
     }
     return lines.join('\n');
 }
 
+// ====== 确定性 UUID 生成（同一 seed 始终生成相同 UUID v4，VMess 订阅必需） ======
+// 修复：原实现会生成 32 字符长度不足的非法 UUID，导致 VMess 配置无法使用。
+// 现改为生成严格合法的 36 字符 UUID v4（version=4, variant=8/9/a/b）。
 function generateUUID(seed) {
-    const s = seed + Date.now().toString(36);
-    let hash = 0;
-    for (let i = 0; i < s.length; i++) { hash = ((hash << 5) - hash) + s.charCodeAt(i); hash |= 0; }
-    const hex = Math.abs(hash).toString(16).padStart(8, '0');
-    return hex.substr(0, 8) + '-' + hex.substr(0, 4) + '-4' + hex.substr(0, 3) + '-a' + hex.substr(0, 3) + '-' + hex.substr(0, 12);
+    const s = String(seed);
+    let h1 = 0x6a09e667, h2 = 0xbb67ae85, h3 = 0x3c6ef372, h4 = 0xa54ff53a;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 0x01000193); h1 = ((h1 << 13) | (h1 >>> 19)) >>> 0;
+        h2 = Math.imul(h2 ^ (c + 0x9e3779b9), 0x85ebca6b); h2 = ((h2 << 11) | (h2 >>> 21)) >>> 0;
+        h3 = Math.imul(h3 ^ (c ^ 0x27d4eb2f), 0x165667b1); h3 = ((h3 << 9) | (h3 >>> 23)) >>> 0;
+        h4 = Math.imul(h4 ^ (c + s.charCodeAt(s.length - 1 - i)), 0x1b873632); h4 = ((h4 << 7) | (h4 >>> 25)) >>> 0;
+    }
+    let hex = [h1, h2, h3, h4].map(n => n.toString(16).padStart(8, '0')).join('');
+    hex = hex.split('');
+    hex[12] = '4';
+    hex[16] = (parseInt(hex[16], 16) & 0x3 | 0x8).toString(16);
+    const h = hex.join('');
+    return h.substring(0, 8) + '-' + h.substring(8, 12) + '-' + h.substring(12, 16) +
+        '-' + h.substring(16, 20) + '-' + h.substring(20, 32);
 }
 
 function viewConfig(id) {
@@ -696,7 +808,12 @@ function downloadConfig(id) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = c.name + '.conf';
+    // 根据协议使用正确的扩展名
+    var ext = '.conf';
+    if (c.protocol === 'WireGuard') ext = '.conf';
+    else if (c.protocol === 'OpenVPN') ext = '.ovpn';
+    else if (c.protocol === 'Shadowsocks' || c.protocol === 'VMess' || c.protocol === 'Trojan') ext = '.txt';
+    a.download = c.name + ext;
     a.click();
     URL.revokeObjectURL(url);
     addAuditLog('下载配置', '配置: ' + c.name);
@@ -711,6 +828,21 @@ function deleteConfig(id) {
     if (c) addActivity('系统', '删除配置 ' + c.name, 'success');
     renderConfigs();
     showToast('配置已删除', 'info');
+}
+
+function clearAllConfigs() {
+    if (appData.configs.length === 0) {
+        showToast('当前没有配置需要清空', 'warning');
+        return;
+    }
+    if (!confirm('确定要清空所有 ' + appData.configs.length + ' 条配置吗？此操作不可撤销！')) return;
+    if (!confirm('再次确认：所有VPN配置将被删除（用户和服务器数据保留）')) return;
+    var count = appData.configs.length;
+    appData.configs = [];
+    saveData();
+    addActivity('系统', '清空所有配置 (' + count + ' 条)', 'success');
+    renderConfigs();
+    showToast('已清空 ' + count + ' 条配置', 'info');
 }
 
 function exportAllConfigs() {
@@ -1009,14 +1141,17 @@ function renderSubscriptionUserList() {
             return c.userId === u.id && !c.disabled;
         }).length;
         var subUrl = getSubscriptionUrl(u.id, baseUrl);
+        var v2rayNUrl = getV2rayNSubscriptionUrl(u.id, baseUrl);
 
         html += '<tr>' +
             '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
-            '<td><code style="font-size:11px;word-break:break-all">' + escapeHtml(subUrl) + '</code></td>' +
+            '<td><div style="margin-bottom:4px"><span style="font-size:10px;color:var(--text-muted)">Clash:</span> <code style="font-size:11px;word-break:break-all">' + escapeHtml(subUrl) + '</code></div>' +
+            '<div><span style="font-size:10px;color:var(--text-muted)">v2rayN:</span> <code style="font-size:11px;word-break:break-all">' + escapeHtml(v2rayNUrl) + '</code></div></td>' +
             '<td>' + configCount + '</td>' +
             '<td>' +
-                '<button class="btn btn-secondary btn-sm" onclick="copySubscriptionUrl(\'' + u.id + '\')" style="margin-right:4px"><i class="fas fa-copy"></i> 复制</button>' +
-                '<button class="btn btn-secondary btn-sm" onclick="exportClashYamlForUser(\'' + u.id + '\')"><i class="fas fa-download"></i> YAML</button>' +
+                '<button class="btn btn-secondary btn-sm" onclick="showSubscriptionUrl(\'' + u.id + '\')" style="margin-right:4px"><i class="fas fa-link"></i> 查看</button>' +
+                '<button class="btn btn-secondary btn-sm" onclick="copySubscriptionUrl(\'' + u.id + '\')" style="margin-right:4px"><i class="fas fa-copy"></i> 复制(Clash)</button>' +
+                '<button class="btn btn-secondary btn-sm" onclick="copyV2rayNUrl(\'' + u.id + '\')"><i class="fas fa-copy"></i> 复制(v2rayN)</button>' +
             '</td></tr>';
     });
 
@@ -1087,12 +1222,66 @@ function exportClashYamlForUser(userId) {
     addAuditLog('导出用户Clash配置', '用户: ' + user.name);
 }
 
+function exportV2rayNSubscriptionAll() {
+    if (appData.configs.length === 0) {
+        showToast('暂无配置，请先生成VPN配置', 'error');
+        return;
+    }
+
+    var content = generateV2rayNContent(appData.configs, appData.users, appData.servers, null);
+    if (!content) {
+        showToast('没有可导出的v2rayN配置节点', 'error');
+        return;
+    }
+
+    // 解码 base64 显示在 textarea 中
+    var links = atob(content);
+    var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
+    var subUrl = baseUrl + '/sub/v2rayn';
+
+    var html = '<div class="form-group"><label>v2rayN 链接列表 (base64编码，可直接导入)</label>' +
+        '<textarea readonly style="width:100%;height:200px;font-family:monospace;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;resize:vertical">' +
+        escapeHtml(links) +
+        '</textarea></div>' +
+        '<div class="form-group"><label>订阅链接（用于 v2rayN 导入）</label>' +
+        '<code style="display:block;background:var(--bg);padding:10px;border-radius:var(--radius-sm);font-size:13px;word-break:break-all">' +
+        escapeHtml(subUrl) +
+        '</code></div>' +
+        '<button class="btn btn-primary" onclick="copyV2rayNContent()"><i class="fas fa-copy"></i> 复制链接文本</button>' +
+        '<button class="btn btn-secondary" onclick="copyV2rayNSubUrl()" style="margin-left:8px"><i class="fas fa-link"></i> 复制订阅URL</button>';
+
+    window._latestV2rayNContent = links;
+    window._latestV2rayNSubUrl = subUrl;
+
+    openModal('v2rayN 配置导出', html);
+    addAuditLog('导出v2rayN配置', '导出所有配置为v2rayN链接列表');
+}
+
+function copyV2rayNContent() {
+    if (!window._latestV2rayNContent) return;
+    navigator.clipboard.writeText(window._latestV2rayNContent).then(function() {
+        showToast('v2rayN链接文本已复制到剪贴板', 'success');
+    }).catch(function() {
+        showToast('复制失败，请手动选择文本复制', 'error');
+    });
+}
+
+function copyV2rayNSubUrl() {
+    if (!window._latestV2rayNSubUrl) return;
+    navigator.clipboard.writeText(window._latestV2rayNSubUrl).then(function() {
+        showToast('v2rayN订阅URL已复制！在 v2rayN → 订阅 → 订阅设置 → 添加 中使用', 'success');
+    }).catch(function() {
+        showToast('复制失败，请手动复制', 'error');
+    });
+}
+
 function showSubscriptionUrl(userId) {
     var user = appData.users.find(function(u) { return u.id === userId; });
     if (!user) return;
 
     var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
     var subUrl = getSubscriptionUrl(userId, baseUrl);
+    var v2rayNUrl = getV2rayNSubscriptionUrl(userId, baseUrl);
     var configCount = appData.configs.filter(function(c) { return c.userId === userId && !c.disabled; }).length;
 
     if (configCount === 0) {
@@ -1103,22 +1292,30 @@ function showSubscriptionUrl(userId) {
     var html = '<div style="padding:8px 0">' +
         '<div class="form-group"><label>用户</label><div>' + escapeHtml(user.name) + '</div></div>' +
         '<div class="form-group"><label>有效配置数</label><div>' + configCount + ' 个节点</div></div>' +
-        '<div class="form-group"><label>订阅链接</label>' +
+        '<div class="form-group"><label>Clash 订阅链接（YAML格式）</label>' +
         '<div style="display:flex;align-items:center;gap:8px">' +
         '<code style="flex:1;background:var(--bg);padding:10px;border-radius:var(--radius-sm);font-size:13px;word-break:break-all">' + escapeHtml(subUrl) + '</code>' +
+        '<button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(\'' + escapeHtml(subUrl) + '\');showToast(\'Clash订阅链接已复制\',\'success\')"><i class="fas fa-copy"></i></button>' +
+        '</div></div>' +
+        '<div class="form-group"><label>v2rayN 订阅链接（链接列表格式）</label>' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+        '<code style="flex:1;background:var(--bg);padding:10px;border-radius:var(--radius-sm);font-size:13px;word-break:break-all">' + escapeHtml(v2rayNUrl) + '</code>' +
+        '<button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(\'' + escapeHtml(v2rayNUrl) + '\');showToast(\'v2rayN订阅链接已复制\',\'success\')"><i class="fas fa-copy"></i></button>' +
         '</div></div>' +
         '<div class="form-group"><label>使用方式</label>' +
         '<ol style="font-size:13px;color:var(--text-secondary);padding-left:20px;line-height:1.8">' +
         '<li>确保订阅服务器已启动（<code>node server.js</code>）</li>' +
         '<li>确保已点击"同步数据到服务器"</li>' +
-        '<li>在 Clash Verge 中，进入"配置" → 粘贴上述订阅链接 → 下载</li>' +
-        '<li>或者直接复制下方YAML配置到Clash Verge</li>' +
+        '<li><strong>Clash Verge:</strong> 配置 → 粘贴 Clash 订阅链接 → 下载</li>' +
+        '<li><strong>v2rayN:</strong> 订阅 → 订阅设置 → 添加 → 粘贴 v2rayN 订阅链接</li>' +
         '</ol></div>' +
-        '<button class="btn btn-primary" onclick="copySubscriptionUrl(\'' + userId + '\');closeModal()"><i class="fas fa-copy"></i> 复制订阅链接</button>' +
+        '<button class="btn btn-primary" onclick="copySubscriptionUrl(\'' + userId + '\');closeModal()"><i class="fas fa-copy"></i> 复制 Clash 链接</button>' +
+        '<button class="btn btn-primary" onclick="copyV2rayNUrl(\'' + userId + '\');closeModal()" style="margin-left:8px"><i class="fas fa-copy"></i> 复制 v2rayN 链接</button>' +
         '<button class="btn btn-secondary" onclick="closeModal();exportClashYamlForUser(\'' + userId + '\')" style="margin-left:8px"><i class="fas fa-file-code"></i> 导出YAML</button>' +
         '</div>';
 
     window._latestSubUrl = subUrl;
+    window._latestV2rayNUrl = v2rayNUrl;
 
     openModal('订阅链接 - ' + escapeHtml(user.name), html);
     addAuditLog('查看订阅链接', '用户: ' + user.name);
@@ -1129,8 +1326,20 @@ function copySubscriptionUrl(userId) {
     var subUrl = window._latestSubUrl || getSubscriptionUrl(userId, baseUrl);
 
     navigator.clipboard.writeText(subUrl).then(function() {
-        showToast('订阅链接已复制！粘贴到 Clash Verge → 配置 → 订阅 中使用', 'success');
-        addAuditLog('复制订阅链接', 'URL已复制');
+        showToast('Clash订阅链接已复制！粘贴到 Clash Verge → 配置 → 订阅 中使用', 'success');
+        addAuditLog('复制Clash订阅链接', 'URL已复制');
+    }).catch(function() {
+        showToast('复制失败，请手动复制', 'error');
+    });
+}
+
+function copyV2rayNUrl(userId) {
+    var baseUrl = document.getElementById('serverBaseUrl') ? document.getElementById('serverBaseUrl').value : 'http://localhost:3456';
+    var v2rayNUrl = window._latestV2rayNUrl || getV2rayNSubscriptionUrl(userId, baseUrl);
+
+    navigator.clipboard.writeText(v2rayNUrl).then(function() {
+        showToast('v2rayN订阅链接已复制！在 v2rayN → 订阅 → 订阅设置 → 添加 → 粘贴使用', 'success');
+        addAuditLog('复制v2rayN订阅链接', 'URL已复制');
     }).catch(function() {
         showToast('复制失败，请手动复制', 'error');
     });
@@ -1153,7 +1362,7 @@ function syncDataToServer() {
     .then(function(res) { return res.json(); })
     .then(function(data) {
         if (data.ok) {
-            showToast('数据已同步到订阅服务器！现在可以在Clash Verge中使用订阅链接了', 'success');
+            showToast('数据已同步到订阅服务器！Clash和v2rayN订阅链接均可使用', 'success');
             addAuditLog('同步数据到服务器', 'users:' + appData.users.length + ' configs:' + appData.configs.length);
             updateServerStatus(true);
         } else {

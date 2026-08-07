@@ -1,13 +1,17 @@
 // ========== Clash YAML 配置生成器 ==========
 // 将 VPN 管理面板中的配置转换为 Clash 兼容的 YAML 格式
+// 同时支持 v2rayN 链接列表格式
 
 const CLASH_BASE_CONFIG = {
-    port: 7890,
-    'socks-port': 7891,
+    'mixed-port': 7890,
     'allow-lan': false,
     mode: 'rule',
     'log-level': 'info',
-    'external-controller': '127.0.0.1:9090'
+    ipv6: false,
+    'external-controller': '127.0.0.1:9090',
+    'unified-delay': true,
+    'tcp-concurrent': true,
+    'find-process-mode': 'strict'
 };
 
 /**
@@ -17,7 +21,7 @@ const CLASH_BASE_CONFIG = {
  * @returns {Object|null} Clash proxy 对象，不支持的协议返回 null
  */
 function generateClashProxy(server, user) {
-    var password = server.password || ('auto_' + user.id.substr(0, 10));
+    var password = server.password || ('auto_' + user.id.substring(0, 10));
     var name = (server.name || server.address) + ' [' + server.protocol + ']';
 
     switch (server.protocol) {
@@ -119,13 +123,29 @@ function generateClashYaml(configs, users, servers, filterUserId) {
         proxyNames.push('DIRECT');
     }
 
-    // 构建 YAML
+        // 构建 YAML
     var lines = [];
 
     // 基础配置
     Object.keys(CLASH_BASE_CONFIG).forEach(function(key) {
         lines.push(key + ': ' + CLASH_BASE_CONFIG[key]);
     });
+    lines.push('');
+    lines.push('dns:');
+    lines.push('  enable: true');
+    lines.push('  listen: 0.0.0.0:1053');
+    lines.push('  enhanced-mode: fake-ip');
+    lines.push('  fake-ip-filter:');
+    lines.push('    - "*.lan"');
+    lines.push('    - "*.local"');
+    lines.push('    - "localhost.ptlogin2.qq.com"');
+    lines.push('  nameserver:');
+    lines.push('    - 223.5.5.5');
+    lines.push('    - 119.29.29.29');
+    lines.push('    - 8.8.8.8');
+    lines.push('  fallback:');
+    lines.push('    - 1.1.1.1');
+    lines.push('    - 8.8.8.8');
     lines.push('');
 
     // Proxies
@@ -134,15 +154,16 @@ function generateClashYaml(configs, users, servers, filterUserId) {
         lines.push('  # 没有有效的代理节点');
     } else {
         proxies.forEach(function(p) {
-            lines.push('  - name: "' + p.name + '"');
+            lines.push('  - name: ' + yamlQuote(p.name));
             lines.push('    type: ' + p.type);
-            lines.push('    server: ' + p.server);
+            lines.push('    server: ' + yamlQuote(p.server));
             lines.push('    port: ' + p.port);
+            lines.push('    udp: true');
             if (p.cipher) lines.push('    cipher: ' + p.cipher);
-            if (p.password) lines.push('    password: "' + p.password + '"');
+            if (p.password) lines.push('    password: ' + yamlQuote(p.password));
             if (p.uuid) lines.push('    uuid: ' + p.uuid);
             if (p.alterId !== undefined) lines.push('    alterId: ' + p.alterId);
-            if (p.sni) lines.push('    sni: ' + p.sni);
+            if (p.sni) lines.push('    sni: ' + yamlQuote(p.sni));
             if (p.network) lines.push('    network: ' + p.network);
         });
     }
@@ -150,11 +171,11 @@ function generateClashYaml(configs, users, servers, filterUserId) {
 
     // Proxy Groups
     lines.push('proxy-groups:');
-    lines.push('  - name: "🚀 节点选择"');
+        lines.push('  - name: "🚀 节点选择"');
     lines.push('    type: select');
     lines.push('    proxies:');
     proxyNames.forEach(function(name) {
-        lines.push('      - "' + name + '"');
+        lines.push('      - ' + yamlQuote(name));
     });
     // 确保 DIRECT 在列表中
     if (proxyNames.indexOf('DIRECT') === -1) {
@@ -168,7 +189,7 @@ function generateClashYaml(configs, users, servers, filterUserId) {
         lines.push('    proxies:');
         proxyNames.forEach(function(name) {
             if (name !== 'DIRECT') {
-                lines.push('      - "' + name + '"');
+                lines.push('      - ' + yamlQuote(name));
             }
         });
         lines.push('    url: "http://www.gstatic.com/generate_204"');
@@ -199,9 +220,11 @@ function generateClashYaml(configs, users, servers, filterUserId) {
  */
 function generateSubscriptionContent(configs, users, servers, filterUserId) {
     var yaml = generateClashYaml(configs, users, servers, filterUserId);
-    // 浏览器端使用 btoa + encodeURIComponent 处理 UTF-8
+    // 浏览器端使用 TextEncoder + btoa 处理 UTF-8 base64 编码
     try {
-        return btoa(unescape(encodeURIComponent(yaml)));
+        var bytes = new TextEncoder().encode(yaml);
+        var binStr = Array.from(bytes, function(b) { return String.fromCharCode(b); }).join('');
+        return btoa(binStr);
     } catch (e) {
         return btoa(yaml);
     }
@@ -216,4 +239,108 @@ function generateSubscriptionContent(configs, users, servers, filterUserId) {
 function getSubscriptionUrl(userId, serverBase) {
     var base = serverBase || 'http://localhost:3456';
     return base + '/sub?token=' + userId;
+}
+
+/**
+ * 生成 YAML 值（转义特殊字符，防止密码等破坏 YAML 结构）
+ */
+function yamlQuote(value) {
+    var str = value == null ? '' : String(value);
+    return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+}
+
+// ========== v2rayN 链接列表配置生成器 ==========
+
+/**
+ * 生成单条 v2rayN 兼容链接
+ * @param {Object} server - 服务器对象
+ * @param {Object} user - 用户对象
+ * @returns {String|null} ss:// / vmess:// / trojan:// 格式的链接
+ */
+function generateV2rayNLink(server, user) {
+    var password = server.password || ('auto_' + user.id.substring(0, 10));
+    var name = encodeURIComponent((server.name || server.address) + ' [' + server.protocol + ']');
+
+    switch (server.protocol) {
+        case 'Shadowsocks':
+            // SIP002: password 必须先 URL 编码再 base64
+            var userinfo = btoa('aes-256-gcm:' + encodeURIComponent(password));
+            return 'ss://' + userinfo + '@' + server.address + ':' + server.port + '#' + name;
+
+        case 'VMess':
+            // vmess://base64(json)
+            var vmessConfig = {
+                v: '2',
+                ps: (server.name || server.address) + ' [' + server.protocol + ']',
+                add: server.address,
+                port: String(server.port),
+                id: generateUUID(user.id),
+                aid: '0',
+                net: 'tcp',
+                type: 'none',
+                host: '',
+                path: '',
+                tls: ''
+            };
+            return 'vmess://' + btoa(JSON.stringify(vmessConfig));
+
+        case 'Trojan':
+            // trojan://password@server:port?security=tls&sni=server#name
+            return 'trojan://' + encodeURIComponent(password) + '@' + server.address + ':' + server.port +
+                '?security=tls&sni=' + encodeURIComponent(server.address) + '#' + name;
+
+        case 'WireGuard':
+        case 'OpenVPN':
+            return null;
+
+        default:
+            return null;
+    }
+}
+
+/**
+ * 生成 v2rayN 订阅内容（base64编码的链接列表）
+ * @param {Array} configs - 配置列表
+ * @param {Array} users - 用户列表
+ * @param {Array} servers - 服务器列表
+ * @param {String} [filterUserId] - 可选，只生成特定用户的配置
+ * @returns {String} base64 编码的链接列表
+ */
+function generateV2rayNContent(configs, users, servers, filterUserId) {
+    var userMap = {};
+    users.forEach(function(u) { userMap[u.id] = u; });
+    var serverMap = {};
+    servers.forEach(function(s) { serverMap[s.id] = s; });
+
+    var links = [];
+    var seen = {};
+
+    configs.forEach(function(c) {
+        if (c.disabled) return;
+        if (filterUserId && c.userId !== filterUserId) return;
+
+        var server = serverMap[c.serverId];
+        var user = userMap[c.userId];
+        if (!server || !user) return;
+
+        var link = generateV2rayNLink(server, user);
+        if (!link || seen[link]) return;
+        seen[link] = true;
+        links.push(link);
+    });
+
+    if (links.length === 0) return '';
+
+    return btoa(links.join('\n'));
+}
+
+/**
+ * 获取用户 v2rayN 订阅 URL
+ * @param {String} userId
+ * @param {String} [serverBase] - 服务器基础URL，默认 http://localhost:3456
+ * @returns {String} v2rayN 订阅 URL
+ */
+function getV2rayNSubscriptionUrl(userId, serverBase) {
+    var base = serverBase || 'http://localhost:3456';
+    return base + '/sub/v2rayn?token=' + userId;
 }
